@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect } from "react";
+import { jsPDF } from "jspdf";
 import LayerModal from "@/components/LayerModal";
 import SuggestInput from "@/components/SuggestInput";
 import CustomerHistoryModal from "@/components/CustomerHistoryModal";
@@ -130,112 +131,265 @@ export default function CustomerProfileModal({
   const btnGhost = isDarkText ? "bg-black/10 hover:bg-black/20" : "bg-white/10 hover:bg-white/20";
   const hint = isDarkText ? "text-black/60" : "text-white/60";
 
-  function buildPrintHtml() {
+  function buildPdfBlobUrl() {
     const data = {
-      rollNo: customer?.rollNo || "",
-      name: form?.name ?? "",
-      age: form?.age ?? "",
-      gender: form?.gender ?? "",
-      address: form?.address ?? "",
-      pincode: form?.pincode ?? "",
-      followYears: form?.followYears ?? "",
-      clubVisitsBefore: form?.clubVisitsBefore ?? "",
-      monthYear: form?.monthYear ?? "",
-      country: form?.country ?? "",
-      state: form?.state ?? "",
-      city: form?.city ?? "",
-      onionGarlic: !!form?.onionGarlic,
-      hasPet: !!form?.hasPet,
-      hadTeacherBefore: !!form?.hadTeacherBefore,
-      familyPermission: !!form?.familyPermission,
-      desc: printDesc || "",
+      rollNo: String(customer?.rollNo || "—"),
+      src: String(source || "—"),
+      name: String(form?.name || "—"),
+      age: String(form?.age || "—"),
+      gender: String(form?.gender || "—"),
+      address: String(form?.address || "—"),
+      pincode: String(form?.pincode || "—"),
+      followYears: String(form?.followYears || "—"),
+      clubVisitsBefore: String(form?.clubVisitsBefore || "—"),
+      monthYear: String(form?.monthYear || "—"),
+      country: String(form?.country || "—"),
+      state: String(form?.state || "—"),
+      city: String(form?.city || "—"),
+      onionGarlic: form?.onionGarlic ? "YES" : "NO",
+      hasPet: form?.hasPet ? "YES" : "NO",
+      hadTeacherBefore: form?.hadTeacherBefore ? "YES" : "NO",
+      familyPermission: form?.familyPermission ? "YES" : "NO",
+      desc: String(printDesc || "—"),
     };
 
-    return `<!doctype html>
+    const pdf = new jsPDF("p", "mm", "a4");
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 12;
+    const gap = 6;
+
+    let y = margin;
+
+    const ensure = (h) => {
+      if (y + h > pageH - margin) {
+        pdf.addPage();
+        y = margin;
+      }
+    };
+
+    const box = (x, yy, w, h) => {
+      pdf.setDrawColor(180);
+      pdf.roundedRect(x, yy, w, h, 2, 2);
+    };
+
+    const labelValue = (x, yy, w, label, value) => {
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.setTextColor(90);
+      pdf.text(label, x + 3, yy + 5);
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(12);
+      pdf.setTextColor(10);
+      const lines = pdf.splitTextToSize(String(value || "—"), w - 6);
+      pdf.text(lines, x + 3, yy + 11);
+    };
+
+    // Header
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(18);
+    pdf.setTextColor(10);
+    pdf.text("Sysbyte Customer Form", margin, y);
+    y += 8;
+
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(10);
+    pdf.setTextColor(80);
+    pdf.text(`RollNo: ${data.rollNo}   |   Source: ${data.src}`, margin, y);
+    y += 8;
+
+    // 2 columns
+    const colW = (pageW - margin * 2 - gap) / 2;
+
+    ensure(22);
+    box(margin, y, colW, 18);
+    box(margin + colW + gap, y, colW, 18);
+    labelValue(margin, y, colW, "Name", data.name);
+    labelValue(margin + colW + gap, y, colW, "Age", data.age);
+    y += 22;
+
+    ensure(22);
+    box(margin, y, colW, 18);
+    box(margin + colW + gap, y, colW, 18);
+    labelValue(margin, y, colW, "Gender", data.gender);
+    labelValue(margin + colW + gap, y, colW, "Pincode", data.pincode);
+    y += 22;
+
+    // Address full
+    ensure(30);
+    box(margin, y, pageW - margin * 2, 24);
+    labelValue(margin, y, pageW - margin * 2, "Address", data.address);
+    y += 30;
+
+    const fullW = pageW - margin * 2;
+
+    const fullField = (label, value) => {
+      ensure(20);
+      box(margin, y, fullW, 16);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.setTextColor(90);
+      pdf.text(label, margin + 3, y + 5);
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(11);
+      pdf.setTextColor(10);
+      const lines = pdf.splitTextToSize(String(value || "—"), fullW - 6);
+      pdf.text(lines, margin + 3, y + 11);
+      y += 20;
+    };
+
+    fullField("Follow Years", data.followYears);
+    fullField("Club Visits Before", data.clubVisitsBefore);
+    fullField("Month/Year", data.monthYear);
+    fullField("City / State / Country", `${data.city} / ${data.state} / ${data.country}`);
+
+    // 4 small boxes
+    ensure(26);
+    const w4 = (fullW - gap * 3) / 4;
+    const items = [
+      ["Onion/Garlic", data.onionGarlic],
+      ["Has Pet", data.hasPet],
+      ["Teacher Before", data.hadTeacherBefore],
+      ["Family Permission", data.familyPermission],
+    ];
+
+    for (let i = 0; i < 4; i++) {
+      const x = margin + i * (w4 + gap);
+      box(x, y, w4, 18);
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(8);
+      pdf.setTextColor(90);
+      pdf.text(items[i][0], x + 2, y + 5);
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(12);
+      pdf.setTextColor(10);
+      pdf.text(String(items[i][1]), x + 2, y + 12);
+    }
+    y += 24;
+
+    // Description
+    ensure(65);
+    box(margin, y, fullW, 55);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(9);
+    pdf.setTextColor(90);
+    pdf.text("Description / Notes", margin + 3, y + 5);
+
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(11);
+    pdf.setTextColor(10);
+    pdf.text(pdf.splitTextToSize(data.desc, fullW - 6), margin + 3, y + 12);
+    y += 62;
+
+    // Sign
+    ensure(20);
+    pdf.setDrawColor(0);
+    pdf.line(margin, y + 10, margin + 70, y + 10);
+    pdf.line(pageW - margin - 70, y + 10, pageW - margin, y + 10);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(10);
+    pdf.setTextColor(60);
+    pdf.text("Customer Signature", margin, y + 16);
+    pdf.text("Admin Signature", pageW - margin - 35, y + 16);
+
+    const blob = pdf.output("blob");
+    const url = URL.createObjectURL(blob);
+    // revoke later (print window needs it)
+    setTimeout(() => URL.revokeObjectURL(url), 120_000);
+    return url;
+  }
+
+  function openPdfPrintWindow(pdfUrl, autoPrint = true) {
+    // HTML wrapper with iframe + print() button
+    const html = `<!doctype html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <title>Sysbyte Customer PDF</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Sysbyte PDF Print</title>
   <style>
-    body { font-family: Arial, sans-serif; padding: 20px; color: #111; }
-    .box { border: 1px solid #ddd; border-radius: 12px; padding: 16px; }
-    h1 { font-size: 18px; margin: 0 0 8px 0; }
-    .muted { color: #666; font-size: 12px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-    .field { border: 1px solid #eee; border-radius: 10px; padding: 10px; }
-    .k { font-size: 11px; color: #666; margin-bottom: 4px; }
-    .v { font-size: 14px; font-weight: 700; }
-    .full { grid-column: 1 / -1; }
-    .textarea { min-height: 80px; white-space: pre-wrap; font-weight: 600; }
-    .sig { margin-top: 22px; display: flex; justify-content: space-between; gap: 16px; }
-    .line { flex: 1; border-top: 1px solid #333; padding-top: 6px; font-size: 12px; color: #333; }
+    body{margin:0;font-family:Arial,sans-serif;}
+    .top{position:sticky;top:0;z-index:999;background:#111;color:#fff;padding:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;}
+    button{border:0;border-radius:10px;padding:10px 12px;font-weight:800;}
+    .b1{background:#fff;color:#111;}
+    .b2{background:rgba(255,255,255,0.18);color:#fff;}
+    iframe{width:100vw;height:calc(100vh - 56px);border:0;}
   </style>
 </head>
 <body>
-  <div class="box">
-    <h1>Sysbyte Customer Form</h1>
-    <div class="muted">RollNo: ${escapeHtml(data.rollNo)} | Source: ${escapeHtml(source)}</div>
-
-    <div class="grid">
-      <div class="field"><div class="k">Name</div><div class="v">${escapeHtml(data.name)}</div></div>
-      <div class="field"><div class="k">Age</div><div class="v">${escapeHtml(data.age)}</div></div>
-
-      <div class="field"><div class="k">Gender</div><div class="v">${escapeHtml(data.gender)}</div></div>
-      <div class="field"><div class="k">Pincode</div><div class="v">${escapeHtml(data.pincode)}</div></div>
-
-      <div class="field full"><div class="k">Address</div><div class="v">${escapeHtml(data.address)}</div></div>
-
-      <div class="field"><div class="k">Follow Years</div><div class="v">${escapeHtml(data.followYears)}</div></div>
-      <div class="field"><div class="k">Club Visits Before</div><div class="v">${escapeHtml(data.clubVisitsBefore)}</div></div>
-
-      <div class="field"><div class="k">Month/Year</div><div class="v">${escapeHtml(data.monthYear)}</div></div>
-      <div class="field"><div class="k">City/State</div><div class="v">${escapeHtml(data.city)} / ${escapeHtml(data.state)}</div></div>
-
-      <div class="field"><div class="k">Onion/Garlic</div><div class="v">${data.onionGarlic ? "YES" : "NO"}</div></div>
-      <div class="field"><div class="k">Has Pet</div><div class="v">${data.hasPet ? "YES" : "NO"}</div></div>
-
-      <div class="field"><div class="k">Teacher Before</div><div class="v">${data.hadTeacherBefore ? "YES" : "NO"}</div></div>
-      <div class="field"><div class="k">Family Permission</div><div class="v">${data.familyPermission ? "YES" : "NO"}</div></div>
-
-      <div class="field full">
-        <div class="k">Description / Notes</div>
-        <div class="v textarea">${escapeHtml(data.desc)}</div>
-      </div>
-    </div>
-
-    <div class="sig">
-      <div class="line">Customer Signature</div>
-      <div class="line">Admin Signature</div>
+  <div class="top">
+    <div>Sysbyte PDF</div>
+    <div style="display:flex;gap:8px;">
+      <button class="b2" id="closeBtn">Close</button>
+      <button class="b1" id="printBtn">Print</button>
     </div>
   </div>
+
+  <iframe id="pdfFrame" src="${escapeHtml(pdfUrl)}"></iframe>
+
+  <script>
+    const frame = document.getElementById('pdfFrame');
+    const printBtn = document.getElementById('printBtn');
+    const closeBtn = document.getElementById('closeBtn');
+
+    function doPrint(){
+      try{
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+      }catch(e){
+        // fallback
+        window.print();
+      }
+    }
+
+    printBtn.addEventListener('click', doPrint);
+    closeBtn.addEventListener('click', ()=>window.close());
+
+    ${autoPrint ? "setTimeout(doPrint, 700);" : ""}
+  </script>
 </body>
 </html>`;
+
+    const wrapperBlob = new Blob([html], { type: "text/html" });
+    const wrapperUrl = URL.createObjectURL(wrapperBlob);
+    const w = window.open(wrapperUrl, "_blank");
+
+    if (!w) {
+      // popup blocked => open pdf directly in same tab (still printable from viewer menu)
+      window.location.href = pdfUrl;
+      URL.revokeObjectURL(wrapperUrl);
+      return;
+    }
+
+    setTimeout(() => URL.revokeObjectURL(wrapperUrl), 120_000);
   }
 
-  async function generatePdfAndOpen() {
+  async function printPdfNow() {
     setPdfBusy(true);
     try {
-      const html = buildPrintHtml();
-      const filename = `sysbyte_${customer?.rollNo || "customer"}`;
+      const pdfUrl = buildPdfBlobUrl();
+      openPdfPrintWindow(pdfUrl, true); // auto print()
+    } catch (e) {
+      console.error(e);
+      alert("PDF/Print failed (try again)");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
 
-      const res = await fetch("/api/print/customer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ html, filename }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        alert(data.error || "PDF failed");
-        return;
-      }
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-
-      // cleanup later
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  async function openPdfOnly() {
+    setPdfBusy(true);
+    try {
+      const pdfUrl = buildPdfBlobUrl();
+      const w = window.open(pdfUrl, "_blank");
+      if (!w) window.location.href = pdfUrl;
+    } catch (e) {
+      console.error(e);
+      alert("PDF open failed");
     } finally {
       setPdfBusy(false);
     }
@@ -413,7 +567,6 @@ export default function CustomerProfileModal({
             </div>
 
             <div className="flex items-center gap-2">
-              {/* ✅ Print always visible */}
               <button
                 type="button"
                 onClick={() => setPrintOpen(true)}
@@ -493,7 +646,7 @@ export default function CustomerProfileModal({
               )}
             </div>
 
-            {/* Actions (same as your file) */}
+            {/* Actions */}
             <div className={`rounded-2xl border p-4 ${panelBg}`}>
               <div className="text-sm font-semibold">Actions</div>
 
@@ -602,12 +755,12 @@ export default function CustomerProfileModal({
         </div>
       </LayerModal>
 
-      {/* ✅ Print Preview modal (Generate PDF) */}
+      {/* ✅ Print Modal */}
       <LayerModal
         open={printOpen}
         layerName="Print"
         title="PDF Print"
-        sub="HTML → PDF convert (server)"
+        sub="PDF + print()"
         onClose={() => setPrintOpen(false)}
         maxWidth="max-w-3xl"
       >
@@ -616,7 +769,7 @@ export default function CustomerProfileModal({
           <div className="text-lg font-bold text-white">{customer.rollNo || "—"}</div>
 
           <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
-            <div className="text-xs text-white/60">Description (print ke andar jayega)</div>
+            <div className="text-xs text-white/60">Description (PDF me jayega)</div>
             <textarea
               value={printDesc}
               onChange={(e) => setPrintDesc(e.target.value)}
@@ -637,15 +790,26 @@ export default function CustomerProfileModal({
             <button
               type="button"
               disabled={pdfBusy}
-              onClick={generatePdfAndOpen}
-              className="flex-1 px-4 py-3 rounded-2xl bg-white text-black font-semibold disabled:opacity-60"
+              onClick={openPdfOnly}
+              className="flex-1 px-4 py-3 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15 disabled:opacity-60"
+              title="Just open PDF"
             >
-              {pdfBusy ? "Generating PDF..." : "Generate PDF & Open"}
+              {pdfBusy ? "Working..." : "Open PDF"}
+            </button>
+
+            <button
+              type="button"
+              disabled={pdfBusy}
+              onClick={printPdfNow}
+              className="flex-1 px-4 py-3 rounded-2xl bg-white text-black font-semibold disabled:opacity-60"
+              title="Auto print()"
+            >
+              {pdfBusy ? "Printing..." : "Print Now"}
             </button>
           </div>
 
           <div className="mt-3 text-xs text-white/50">
-            PDF open hote hi tum browser/phone viewer se print kar sakte ho.
+            Agar print service off hai to Android “printer not available” dega. Settings → Printing → Default Print Service ON.
           </div>
         </div>
       </LayerModal>
