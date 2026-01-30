@@ -31,6 +31,16 @@ function safeId(x) {
   return String(x);
 }
 
+function escapeHtml(s) {
+  const str = String(s ?? "");
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 export default function Calander({ role }) {
   // Layer 1
   const [calOpen, setCalOpen] = useState(false);
@@ -308,6 +318,147 @@ export default function Calander({ role }) {
     setProfileOpen(true);
   }
 
+  // ✅ Print ALL templates of current container (sequence #1..N)
+  function openPrintAllForContainer() {
+    if (!container?._id) return alert("Container not ready");
+    if (!assignments || assignments.length === 0) return alert("No customers in container");
+
+    const title = `${container.date} / ${container.mode}`;
+    const total = assignments.length;
+
+    const pagesHtml = assignments
+      .map((a, idx) => {
+        const c = a.customer || {};
+        const seq = idx + 1;
+        const kind = a.kind || "SINGLE";
+        const roleInPair = a.roleInPair ? ` (${a.roleInPair})` : "";
+
+        return `
+          <section class="sheet">
+            <div class="sheetHead">
+              <div class="muted">Sysbyte • ${escapeHtml(title)}</div>
+              <div class="muted">#${seq}/${total} • ${escapeHtml(kind + roleInPair)}</div>
+            </div>
+
+            <h2 class="name">${escapeHtml(c.name || "—")}</h2>
+
+            <div class="grid">
+              <div class="field"><div class="k">RollNo</div><div class="v">${escapeHtml(c.rollNo || "—")}</div></div>
+              <div class="field"><div class="k">Age</div><div class="v">${escapeHtml(c.age || "—")}</div></div>
+
+              <div class="field"><div class="k">Gender</div><div class="v">${escapeHtml(c.gender || "—")}</div></div>
+              <div class="field"><div class="k">Pincode</div><div class="v">${escapeHtml(c.pincode || "—")}</div></div>
+
+              <div class="field full"><div class="k">Address</div><div class="v">${escapeHtml(c.address || "—")}</div></div>
+
+              <div class="field"><div class="k">Follow Years</div><div class="v">${escapeHtml(c.followYears || "—")}</div></div>
+              <div class="field"><div class="k">Club Visits</div><div class="v">${escapeHtml(c.clubVisitsBefore || "—")}</div></div>
+
+              <div class="field"><div class="k">Month/Year</div><div class="v">${escapeHtml(c.monthYear || "—")}</div></div>
+              <div class="field"><div class="k">City/State</div><div class="v">${escapeHtml((c.city || "—") + " / " + (c.state || "—"))}</div></div>
+
+              <div class="field full">
+                <div class="k">Description / Notes</div>
+                <div class="descBox"></div>
+              </div>
+            </div>
+
+            <div class="sig">
+              <div class="line">Customer Signature</div>
+              <div class="line">Admin Signature</div>
+            </div>
+          </section>
+        `;
+      })
+      .join("");
+
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Print • ${escapeHtml(title)}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f7f7f7; color: #111; }
+    .topbar {
+      position: sticky; top: 0; z-index: 9999;
+      background: #111; color: #fff;
+      padding: 10px 12px; display: flex; align-items: center; justify-content: space-between;
+    }
+    .btn { border: 0; border-radius: 10px; padding: 10px 12px; font-weight: 800; }
+    .btnClose { background: rgba(255,255,255,0.18); color: #fff; }
+    .btnPrint { background: #fff; color: #111; }
+
+    .wrap { padding: 14px; }
+    .sheet {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 14px;
+      break-after: page;
+      page-break-after: always;
+    }
+    .sheet:last-child { break-after: auto; page-break-after: auto; }
+
+    .sheetHead { display:flex; justify-content: space-between; gap:10px; }
+    .muted { font-size: 12px; color: #666; }
+    .name { margin: 10px 0 6px 0; font-size: 18px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .field { border:1px solid #eee; border-radius: 10px; padding: 10px; }
+    .full { grid-column: 1 / -1; }
+    .k { font-size: 11px; color: #666; margin-bottom: 4px; }
+    .v { font-size: 14px; font-weight: 700; }
+    .descBox { border: 1px dashed #999; border-radius: 10px; height: 90px; margin-top: 8px; }
+    .sig { margin-top: 22px; display:flex; gap:16px; }
+    .line { flex:1; border-top: 1px solid #333; padding-top: 6px; font-size: 12px; }
+
+    @media print {
+      body { background: #fff; }
+      .topbar { display:none; }
+      .wrap { padding: 0; }
+      .sheet { border: none; border-radius: 0; margin: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div style="font-weight:900;">Print All • ${escapeHtml(title)} (${total})</div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btnClose" id="btnClose" type="button">Close</button>
+      <button class="btn btnPrint" id="btnPrint" type="button">Print</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    ${pagesHtml}
+  </div>
+
+  <script>
+    document.getElementById('btnPrint').addEventListener('click', function() {
+      window.focus();
+      window.print();
+    });
+    document.getElementById('btnClose').addEventListener('click', function() {
+      window.close();
+    });
+  </script>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+
+    const w = window.open(url, "_blank");
+    if (!w) {
+      URL.revokeObjectURL(url);
+      alert("Popup blocked. Please allow popups for printing.");
+      return;
+    }
+
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
   const counts = genderCountFromAssignments();
 
   const selectedCustomers = useMemo(() => {
@@ -322,10 +473,10 @@ export default function Calander({ role }) {
   const familySelectStyle = useMemo(() => {
     if (pickMode !== "FAMILY") return { border: "border-white/10", bg: "bg-black/30" };
     if (selectedIds.length === 2) {
-      return { border: "border-fuchsia-400/30", bg: "bg-fuchsia-500/10" }; // couple highlight
+      return { border: "border-fuchsia-400/30", bg: "bg-fuchsia-500/10" };
     }
     if (selectedIds.length > 2) {
-      return { border: "border-blue-400/30", bg: "bg-blue-500/10" }; // family highlight
+      return { border: "border-blue-400/30", bg: "bg-blue-500/10" };
     }
     return { border: "border-white/10", bg: "bg-black/30" };
   }, [pickMode, selectedIds.length]);
@@ -465,6 +616,17 @@ export default function Calander({ role }) {
           {role === "ADMIN" && (
             <button onClick={increaseLimit} className="w-11 h-11 shrink-0 rounded-2xl bg-white text-black font-bold" title="Increase limit">+</button>
           )}
+
+          {/* ✅ PRINT ALL */}
+          <button
+            type="button"
+            onClick={openPrintAllForContainer}
+            className="w-11 h-11 shrink-0 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10"
+            title="Print all cards in this container"
+          >
+            🖨
+          </button>
+
           <button onClick={() => setShowList((v) => !v)} className="w-11 h-11 shrink-0 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10" title="Toggle list">☰</button>
           <button onClick={openAddCustomerLayer} className="w-11 h-11 shrink-0 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10" title="Add customer">＋</button>
         </div>
@@ -610,7 +772,7 @@ export default function Calander({ role }) {
                       onClick={() => {
                         setSelectedIds((prev) => {
                           if (prev.includes(id)) return prev.filter((x) => x !== id);
-                          return [...prev, id]; // unlimited select
+                          return [...prev, id];
                         });
                       }}
                       className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-xs"
@@ -665,7 +827,7 @@ export default function Calander({ role }) {
         </div>
       </LayerModal>
 
-      {/* Layer 4: Confirm Family (2..N) */}
+      {/* Layer 4: Confirm Family */}
       <LayerModal
         open={confirmFamilyOpen}
         layerName="Confirm Family"
@@ -714,7 +876,7 @@ export default function Calander({ role }) {
         </div>
       </LayerModal>
 
-      {/* Profile modal from container cards */}
+      {/* Profile modal */}
       <CustomerProfileModal
         open={profileOpen}
         onClose={() => {
