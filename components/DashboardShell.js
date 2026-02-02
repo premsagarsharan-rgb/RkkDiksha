@@ -13,6 +13,7 @@ import SittingData from "@/components/dashboard/SittingData";
 import UserCreate from "@/components/dashboard/UserCreate";
 import UserManage from "@/components/dashboard/UserManage";
 import CustomerLocationTracker from "@/components/dashboard/CustomerLocationTracker";
+import Screens from "@/components/dashboard/Screens";
 
 export default function DashboardShell({ session }) {
   const themeApi = useTheme();
@@ -26,6 +27,7 @@ export default function DashboardShell({ session }) {
     pending: true,
     sitting: false,
     tracker: false,
+    screens: true, // ✅ default allow (you can control from permissions later)
   };
 
   const can = (key) => (isAdmin ? true : !!perms[key]);
@@ -39,6 +41,7 @@ export default function DashboardShell({ session }) {
     if (can("sitting")) t.push({ key: "sitting", title: "Sitting", sub: "ACTIVE", C: SittingData });
 
     if (isAdmin || can("tracker")) t.push({ key: "tracker", title: "Tracker", sub: "Where is customer now?", C: CustomerLocationTracker });
+    if (can("screens")) t.push({ key: "screens", title: "Screens", sub: "Presentation screens", C: Screens });
 
     if (isAdmin) t.push({ key: "usercreate", title: "User Create", sub: "Create employee", C: UserCreate });
     if (isAdmin) t.push({ key: "usermanage", title: "User Manage", sub: "Permissions", C: UserManage });
@@ -50,13 +53,10 @@ export default function DashboardShell({ session }) {
   const active = tiles.find((t) => t.key === openKey);
   const ActiveComp = active?.C;
 
-  // ✅ Light mode me blue glow invert hoke orange ho jata hai.
-  // Invert filter ke baad same blue glow chahiye, to light mode me "pre-inverted" orange use karo.
   const tileGlow = isLight
-    ? "0 0 55px rgba(196,125,9,0.10)" // inverted => blue-ish
+    ? "0 0 55px rgba(196,125,9,0.10)"
     : "0 0 55px rgba(59,130,246,0.10)";
 
-  // ✅ Light mode me dashboard surfaces thode stronger chahiye (invert ke baad contrast badhe)
   const topbarCls = isLight
     ? "border-b border-white/20 bg-white/20 backdrop-blur-xl"
     : "border-b border-white/10 bg-black/25 backdrop-blur-xl";
@@ -71,7 +71,6 @@ export default function DashboardShell({ session }) {
 
   return (
     <div className="min-h-screen text-white">
-      {/* Top */}
       <div className={`sticky top-0 z-40 ${topbarCls}`}>
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
           <div>
@@ -101,7 +100,6 @@ export default function DashboardShell({ session }) {
         </div>
       </div>
 
-      {/* Tiles */}
       <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {tiles.map((t) => (
@@ -120,7 +118,6 @@ export default function DashboardShell({ session }) {
         </div>
       </div>
 
-      {/* Modal popup for selected component */}
       <LayerModal
         open={!!active}
         zIndex={55}
