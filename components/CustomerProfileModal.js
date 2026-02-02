@@ -25,6 +25,58 @@ function escapeHtml(s) {
     .replace(/'/g, "&#039;");
 }
 
+/* -------------------------
+   Custom Calendar Helpers
+-------------------------- */
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function toDateKey(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function fromDateKey(key) {
+  const [y, m, d] = String(key || "").split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+}
+function startOfMonth(d) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+function addMonths(d, delta) {
+  return new Date(d.getFullYear(), d.getMonth() + delta, 1);
+}
+function safeArray(x) {
+  return Array.isArray(x) ? x : [];
+}
+function extractContainerCards(containerObj) {
+  const a =
+    containerObj?.assignments ??
+    containerObj?.customers ??
+    containerObj?.items ??
+    containerObj?.cards ??
+    [];
+  return safeArray(a);
+}
+function cardLabel(x) {
+  if (!x) return "—";
+  if (typeof x === "string") return x;
+
+  if (x.name) return x.rollNo ? `${x.name} (${x.rollNo})` : x.name;
+  if (x.customer?.name) return x.customer.rollNo ? `${x.customer.name} (${x.customer.rollNo})` : x.customer.name;
+
+  if (x.customerName) return x.customerRollNo ? `${x.customerName} (${x.customerRollNo})` : x.customerName;
+  if (x.fullName) return x.fullName;
+
+  if (x.customerId) return String(x.customerId);
+  if (x._id) return String(x._id);
+
+  try {
+    return JSON.stringify(x);
+  } catch {
+    return String(x);
+  }
+}
+
 export default function CustomerProfileModal({
   open,
   onClose,
@@ -33,6 +85,10 @@ export default function CustomerProfileModal({
   onChanged,
   initialApproveStep,
   initialEditMode,
+
+  // ✅ NEW: Meeting Reject -> ApproveFor context
+  contextContainerId = null,
+  contextAssignmentId = null,
 }) {
   const [hmmOpen, setHmmOpen] = useState(false);
 
@@ -53,11 +109,25 @@ export default function CustomerProfileModal({
   const [pickedDate, setPickedDate] = useState(null);
   const [note, setNote] = useState("");
 
+  // ✅ Custom Calendar Picker states
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [datePickerMonth, setDatePickerMonth] = useState(() => startOfMonth(new Date()));
+  const [datePickerSelected, setDatePickerSelected] = useState(null);
+
+  // ✅ Show Date container preview states (count + names)
+  const [showDateOpen, setShowDateOpen] = useState(false);
+  const [showDateBusy, setShowDateBusy] = useState(false);
+  const [showDateInfo, setShowDateInfo] = useState(null);
+  // { dateKey, mode, container, assignments, reserved, error }
+
+  const isApproveForShift = Boolean(source === "SITTING" && contextContainerId && contextAssignmentId);
+
   const { requestCommit, CommitModal } = useCommitGate({
     defaultSuggestions: [
       "Created profile",
       "Corrected customer data",
       "Approved for calander container",
+      "Meeting reject → ApproveFor",
       "Moved to pending",
       "Restored from pending",
       "Updated profile details",
@@ -99,6 +169,13 @@ export default function CustomerProfileModal({
     setPickedDate(null);
     setNote("");
 
+    // reset picker/preview
+    setDatePickerOpen(false);
+    setDatePickerSelected(null);
+    setDatePickerMonth(startOfMonth(new Date()));
+    setShowDateOpen(false);
+    setShowDateInfo(null);
+
     if ((source === "TODAY" || source === "PENDING" || source === "SITTING") && initialApproveStep) {
       setApproveStep(initialApproveStep);
     } else {
@@ -114,11 +191,7 @@ export default function CustomerProfileModal({
 
   const canFinalizeEdit = useMemo(() => {
     if (!form) return false;
-    return Boolean(
-      String(form.name || "").trim() &&
-      String(form.age || "").trim() &&
-      String(form.address || "").trim()
-    );
+    return Boolean(String(form.name || "").trim() && String(form.age || "").trim() && String(form.address || "").trim());
   }, [form]);
 
   if (!open || !customer || !form) return null;
@@ -272,7 +345,6 @@ export default function CustomerProfileModal({
 </html>`;
   }
 
-  // ✅ Most stable: open Blob URL (no document.write)
   function openPrintPage() {
     const html = buildPrintHtml();
     const blob = new Blob([html], { type: "text/html" });
@@ -285,7 +357,6 @@ export default function CustomerProfileModal({
       return;
     }
 
-    // cleanup later
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
@@ -396,15 +467,45 @@ export default function CustomerProfileModal({
     if (!pickedDate) return alert("Select date");
 
     const commitMessage = await requestCommit({
-      title: "Push to Container",
-      subtitle: "Customer will be assigned to selected container.",
-      preset: "Approved for calander container",
+      title: isApproveForShift ? "Approve For (Shift)" : "Push to Container",
+      subtitle: isApproveForShift
+        ? "Meeting card will be shifted to selected container."
+        : "Customer will be assigned to selected container.",
+      preset: isApproveForShift ? "Meeting reject → ApproveFor" : "Approved for calander container",
     }).catch(() => null);
 
     if (!commitMessage) return;
 
     setBusy(true);
     try {
+      // ✅ Meeting Reject -> ApproveFor (SHIFT assignment)
+      if (isApproveForShift) {
+        const res = await fetch(
+          `/api/calander/container/${contextContainerId}/assignments/${contextAssignmentId}/approve-for`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              toDate: pickedDate,
+              toMode: mode,
+              note,
+              commitMessage,
+            }),
+          }
+        );
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (data.error === "HOUSEFULL") return alert("Housefull: limit reached");
+          return alert(data.error || "ApproveFor shift failed");
+        }
+
+        onChanged?.();
+        onClose();
+        return;
+      }
+
+      // ✅ Normal existing flow (assign)
       const cRes = await fetch("/api/calander/container/by-date", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -440,13 +541,77 @@ export default function CustomerProfileModal({
     }
   }
 
+  function openCustomDatePicker() {
+    const now = new Date();
+    const base = pickedDate ? fromDateKey(pickedDate) : now;
+    setDatePickerMonth(startOfMonth(base || now));
+    setDatePickerSelected(pickedDate || null);
+    setDatePickerOpen(true);
+  }
+
+  // ✅ improved: loads container detail + reserved
+  async function showDateContainerPreview(dateKey) {
+    if (!dateKey) return;
+
+    setShowDateBusy(true);
+    setShowDateInfo({ dateKey, mode, container: null, assignments: [], reserved: [], error: null });
+    setShowDateOpen(true);
+
+    try {
+      // ensure container exists by date
+      const cRes = await fetch("/api/calander/container/by-date", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: dateKey, mode }),
+      });
+      const cData = await cRes.json().catch(() => ({}));
+      if (!cRes.ok) {
+        setShowDateInfo({ dateKey, mode, container: null, assignments: [], reserved: [], error: cData.error || "Failed to load container" });
+        return;
+      }
+
+      const containerObj = cData?.container?.value ?? cData?.container ?? null;
+      if (!containerObj?._id) {
+        setShowDateInfo({ dateKey, mode, container: null, assignments: [], reserved: [], error: "Invalid container response" });
+        return;
+      }
+
+      const dRes = await fetch(`/api/calander/container/${containerObj._id}?includeReserved=1`);
+      const dData = await dRes.json().catch(() => ({}));
+      if (!dRes.ok) {
+        setShowDateInfo({ dateKey, mode, container: null, assignments: [], reserved: [], error: dData.error || "Details load failed" });
+        return;
+      }
+
+      setShowDateInfo({
+        dateKey,
+        mode,
+        container: dData.container || containerObj,
+        assignments: dData.assignments || [],
+        reserved: dData.reserved || [],
+        error: null,
+      });
+    } catch (e) {
+      setShowDateInfo({ dateKey, mode, container: null, assignments: [], reserved: [], error: "Network error" });
+    } finally {
+      setShowDateBusy(false);
+    }
+  }
+
+  function confirmPickedDate(dateKey) {
+    if (!dateKey) return;
+    setPickedDate(dateKey);
+    setDatePickerOpen(false);
+    setApproveStep("note");
+  }
+
   return (
     <>
       <LayerModal
         open={open}
         layerName="Customer Profile"
         title={customer.name}
-        sub={`Source: ${source}`}
+        sub={`Source: ${source}${isApproveForShift ? " • ApproveFor Shift" : ""}`}
         onClose={onClose}
         maxWidth="max-w-4xl"
       >
@@ -538,7 +703,7 @@ export default function CustomerProfileModal({
               )}
             </div>
 
-            {/* Actions (unchanged) */}
+            {/* Actions */}
             <div className={`rounded-2xl border p-4 ${panelBg}`}>
               <div className="text-sm font-semibold">Actions</div>
 
@@ -571,7 +736,7 @@ export default function CustomerProfileModal({
                       Approve‑For
                     </button>
                     <div className={`px-4 py-2 rounded-xl text-sm ${btnGhost} ${hint}`}>
-                      Assign to container
+                      {isApproveForShift ? "Shift meeting card to container" : "Assign to container"}
                     </div>
                   </>
                 )}
@@ -584,26 +749,44 @@ export default function CustomerProfileModal({
                       <div className="text-sm font-semibold">Pick Calander Date</div>
 
                       <div className="mt-3 flex gap-2">
-                        <button onClick={() => setMode("DIKSHA")} className={`flex-1 px-3 py-2 rounded-xl text-sm ${mode === "DIKSHA" ? btnPrimary + " font-semibold" : btnGhost}`}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMode("DIKSHA");
+                            setPickedDate(null);
+                            setNote("");
+                          }}
+                          className={`flex-1 px-3 py-2 rounded-xl text-sm ${mode === "DIKSHA" ? btnPrimary + " font-semibold" : btnGhost}`}
+                        >
                           Diksha
                         </button>
-                        <button onClick={() => setMode("MEETING")} className={`flex-1 px-3 py-2 rounded-xl text-sm ${mode === "MEETING" ? btnPrimary + " font-semibold" : btnGhost}`}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMode("MEETING");
+                            setPickedDate(null);
+                            setNote("");
+                          }}
+                          className={`flex-1 px-3 py-2 rounded-xl text-sm ${mode === "MEETING" ? btnPrimary + " font-semibold" : btnGhost}`}
+                        >
                           Meeting
                         </button>
                       </div>
 
-                      <input
-                        type="date"
-                        className={`mt-3 w-full rounded-xl border px-3 py-2 text-sm outline-none ${
+                      <button
+                        type="button"
+                        onClick={openCustomDatePicker}
+                        className={`mt-3 w-full rounded-xl border px-3 py-2 text-sm text-left ${
                           isDarkText ? "bg-white border-black/10 text-black" : "bg-white/5 border-white/10 text-white"
                         }`}
-                        value={pickedDate || ""}
-                        onChange={(e) => setPickedDate(e.target.value)}
-                      />
-
-                      <button onClick={() => setApproveStep("note")} disabled={!pickedDate} className={`mt-3 w-full px-4 py-2 rounded-xl font-semibold ${btnPrimary}`}>
-                        Confirm Date
+                      >
+                        <div className="text-xs opacity-70">Selected Date</div>
+                        <div className="font-semibold">{pickedDate || "Tap to select date"}</div>
                       </button>
+
+                      <div className={`mt-2 text-xs ${hint}`}>
+                        Date pe click karo → <b>Confirm</b> / <b>Show Date</b>
+                      </div>
                     </div>
                   )}
 
@@ -622,8 +805,21 @@ export default function CustomerProfileModal({
                         />
                       </div>
 
-                      <button disabled={busy} onClick={approveToContainer} className={`mt-3 w-full px-4 py-2 rounded-xl font-semibold ${btnPrimary} disabled:opacity-60`}>
-                        Push to Container
+                      <button
+                        disabled={busy}
+                        onClick={approveToContainer}
+                        className={`mt-3 w-full px-4 py-2 rounded-xl font-semibold ${btnPrimary} disabled:opacity-60`}
+                      >
+                        {isApproveForShift ? "Approve For (Shift Now)" : "Push to Container"}
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setApproveStep("pickDate")}
+                        className={`mt-2 w-full px-4 py-2 rounded-xl ${btnGhost} disabled:opacity-60`}
+                      >
+                        Change Date
                       </button>
                     </div>
                   )}
@@ -648,125 +844,224 @@ export default function CustomerProfileModal({
         </div>
       </LayerModal>
 
-      {/* ✅ Print Preview Layer */}
+      {/* ✅ Custom Date Picker Modal */}
       <LayerModal
-        open={printOpen}
-        layerName="Print"
-        title="Print Preview"
-        sub="Template view"
-        onClose={() => setPrintOpen(false)}
+        open={datePickerOpen}
+        layerName="Calendar Picker"
+        title={`Select Date (${mode})`}
+        sub="Tap a date → Confirm / Show Date"
+        onClose={() => setDatePickerOpen(false)}
         maxWidth="max-w-3xl"
       >
-        <div className="rounded-3xl border border-white/10 bg-black/30 p-5">
-          <div className="text-xs text-white/60">RollNo</div>
-          <div className="text-lg font-bold text-white">{customer.rollNo || "—"}</div>
+        <CalendarGrid
+          month={datePickerMonth}
+          onPrev={() => setDatePickerMonth((m) => addMonths(m, -1))}
+          onNext={() => setDatePickerMonth((m) => addMonths(m, 1))}
+          selectedKey={datePickerSelected}
+          onSelect={(k) => setDatePickerSelected(k)}
+          isDarkText={isDarkText}
+        />
 
-          <div className="mt-4 grid sm:grid-cols-2 gap-3">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="text-xs text-white/60">Name</div>
-              <div className="text-white font-semibold">{form.name}</div>
-            </div>
+        <div className="mt-4 flex flex-col sm:flex-row gap-2">
+          <button
+            type="button"
+            disabled={!datePickerSelected}
+            onClick={() => confirmPickedDate(datePickerSelected)}
+            className={`flex-1 px-4 py-3 rounded-2xl font-semibold ${btnPrimary} disabled:opacity-60`}
+          >
+            Confirm
+          </button>
 
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="text-xs text-white/60">Gender / Age</div>
-              <div className="text-white font-semibold">{form.gender} / {form.age}</div>
-            </div>
+          <button
+            type="button"
+            disabled={!datePickerSelected}
+            onClick={async () => {
+              await showDateContainerPreview(datePickerSelected);
+            }}
+            className={`flex-1 px-4 py-3 rounded-2xl ${btnGhost} disabled:opacity-60`}
+          >
+            Show Date
+          </button>
+        </div>
 
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3 sm:col-span-2">
-              <div className="text-xs text-white/60">Address</div>
-              <div className="text-white font-semibold">{form.address}</div>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3 sm:col-span-2">
-              <div className="text-xs text-white/60">Description</div>
-              <textarea
-                value={printDesc}
-                onChange={(e) => setPrintDesc(e.target.value)}
-                placeholder="Write description..."
-                className="mt-2 w-full rounded-2xl bg-black/30 border border-white/10 px-3 py-2 text-sm text-white outline-none min-h-[90px]"
-              />
-            </div>
-          </div>
-
-          <div className="mt-4 flex gap-2">
-            <button
-              type="button"
-              onClick={() => setPrintOpen(false)}
-              className="flex-1 px-4 py-3 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15"
-            >
-              Close
-            </button>
-
-            <button
-              type="button"
-              onClick={openPrintPage}
-              className="flex-1 px-4 py-3 rounded-2xl bg-white text-black font-semibold"
-            >
-              Open Print Page (Stable)
-            </button>
-          </div>
-
-          <div className="mt-3 text-xs text-white/50">
-            Agar “printer not available” aaye: Print Page me <b>Download HTML</b> kar lo ya <b>Save as PDF</b> choose karo.
-          </div>
+        <div className={`mt-3 text-xs ${hint}`}>
+          Selected: <b>{datePickerSelected || "—"}</b>
         </div>
       </LayerModal>
 
-      {/* Confirm Edit Layer (same) */}
+      {/* ✅ Show Date Preview Modal (count + names + reserved) */}
       <LayerModal
-        open={confirmEditOpen}
-        layerName="Confirm Edit"
-        title="Confirm Edit → Finalize"
-        sub="Review → then Commit & Move"
-        onClose={() => setConfirmEditOpen(false)}
-        maxWidth="max-w-3xl"
+        open={showDateOpen}
+        layerName="Date Container"
+        title="Container Preview"
+        sub={showDateInfo?.dateKey ? `${showDateInfo.dateKey} • ${showDateInfo.mode}` : "Loading..."}
+        onClose={() => setShowDateOpen(false)}
+        maxWidth="max-w-4xl"
       >
-        {err ? (
-          <div className="mb-3 rounded-2xl border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-200">
-            {err}
+        <div className={`rounded-3xl border p-5 ${panelBg}`}>
+          {showDateBusy ? (
+            <div className={hint}>Loading...</div>
+          ) : showDateInfo?.error ? (
+            <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-200">
+              {showDateInfo.error}
+            </div>
+          ) : !showDateInfo?.container?._id ? (
+            <div className={hint}>No container found for this date.</div>
+          ) : (
+            <>
+              <div className="text-sm font-semibold">Container</div>
+              <div className={`mt-1 text-xs ${hint}`}>ID: {showDateInfo.container._id}</div>
+
+              <div className="mt-4 grid sm:grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                  <div className="text-xs opacity-70">IN CONTAINER</div>
+                  <div className="text-xl font-bold">{(showDateInfo.assignments || []).length}</div>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-3">
+                  <div className="text-xs opacity-70">RESERVED (Meeting holds)</div>
+                  <div className="text-xl font-bold">{(showDateInfo.reserved || []).length}</div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                  <div className="text-xs opacity-70">LIMIT</div>
+                  <div className="text-xl font-bold">
+                    {(showDateInfo.container?.limit ?? 20)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid sm:grid-cols-2 gap-3">
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                  <div className="text-sm font-semibold">Names (IN CONTAINER)</div>
+                  <div className="mt-2 max-h-[300px] overflow-auto space-y-2 pr-1">
+                    {(showDateInfo.assignments || []).length === 0 ? (
+                      <div className={hint}>No cards.</div>
+                    ) : (
+                      (showDateInfo.assignments || []).map((x, idx) => (
+                        <div key={x?._id || x?.customerId || idx} className="rounded-2xl border border-white/10 bg-white/5 p-3 text-sm">
+                          <div className="font-semibold">#{idx + 1} — {cardLabel(x)}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/5 p-3">
+                  <div className="text-sm font-semibold">Names (RESERVED)</div>
+                  <div className="mt-2 max-h-[300px] overflow-auto space-y-2 pr-1">
+                    {(showDateInfo.reserved || []).length === 0 ? (
+                      <div className={hint}>No reservations.</div>
+                    ) : (
+                      (showDateInfo.reserved || []).map((x, idx) => (
+                        <div key={x?._id || x?.customerId || idx} className="rounded-2xl border border-emerald-400/20 bg-white/5 p-3 text-sm">
+                          <div className="font-semibold">#{idx + 1} — {cardLabel(x)}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Backward compatibility if needed */}
+              <div className="mt-4 hidden">
+                {extractContainerCards(showDateInfo.container).length}
+              </div>
+            </>
+          )}
+
+          <div className="mt-4 flex gap-2">
+            <button type="button" onClick={() => setShowDateOpen(false)} className={`flex-1 px-4 py-3 rounded-2xl ${btnGhost}`}>
+              Close
+            </button>
           </div>
-        ) : null}
-
-        <div className="rounded-3xl border border-white/10 bg-black/30 p-5 space-y-2">
-          <Line k="Name" v={form.name} />
-          <Line k="Age" v={form.age} />
-          <Line k="Address" v={form.address} />
-          <Line k="Pincode" v={form.pincode || "-"} />
-          <Line k="Gender" v={form.gender} />
-          <Line k="Follow Years" v={form.followYears || "-"} />
-          <Line k="Club Visits" v={form.clubVisitsBefore || "-"} />
-          <Line k="Month/Year" v={form.monthYear || "-"} />
-          <Line k="Country" v={form.country || "-"} />
-          <Line k="State" v={form.state || "-"} />
-          <Line k="City" v={form.city || "-"} />
-          <Line k="Onion/Garlic" v={form.onionGarlic ? "YES" : "NO"} />
-          <Line k="Has Pet" v={form.hasPet ? "YES" : "NO"} />
-          <Line k="Teacher Before" v={form.hadTeacherBefore ? "YES" : "NO"} />
-          <Line k="Family Permission" v={form.familyPermission ? "YES" : "NO"} />
-        </div>
-
-        <div className="mt-4 flex gap-2">
-          <button
-            disabled={busy}
-            onClick={() => setConfirmEditOpen(false)}
-            className="flex-1 px-4 py-3 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15 disabled:opacity-60"
-          >
-            Back (Edit)
-          </button>
-
-          <button
-            disabled={busy}
-            onClick={confirmEditAndFinalize}
-            className="flex-1 px-4 py-3 rounded-2xl bg-white text-black font-semibold disabled:opacity-60"
-          >
-            Commit & Move to Sitting
-          </button>
         </div>
       </LayerModal>
 
       <CustomerHistoryModal open={hmmOpen} onClose={() => setHmmOpen(false)} customerId={customer._id} />
       {CommitModal}
     </>
+  );
+}
+
+/* -------------------------
+   Calendar Grid Component
+-------------------------- */
+function CalendarGrid({ month, onPrev, onNext, selectedKey, onSelect, isDarkText }) {
+  const hint = isDarkText ? "text-black/60" : "text-white/60";
+
+  const monthLabel = useMemo(() => {
+    try {
+      return month?.toLocaleString?.(undefined, { month: "long", year: "numeric" }) || "";
+    } catch {
+      return "";
+    }
+  }, [month]);
+
+  const days = useMemo(() => {
+    const first = startOfMonth(month);
+    const firstDow = first.getDay();
+    const start = new Date(first.getFullYear(), first.getMonth(), first.getDate() - firstDow);
+
+    const out = [];
+    for (let i = 0; i < 42; i++) out.push(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+    return out;
+  }, [month]);
+
+  const today = useMemo(() => new Date(), []);
+  const todayKey = useMemo(() => toDateKey(today), [today]);
+
+  return (
+    <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <button type="button" onClick={onPrev} className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15">
+          Prev
+        </button>
+
+        <div className="font-semibold">{monthLabel}</div>
+
+        <button type="button" onClick={onNext} className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15">
+          Next
+        </button>
+      </div>
+
+      <div className={`grid grid-cols-7 gap-2 text-xs ${hint} mb-2`}>
+        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+          <div key={d} className="text-center">{d}</div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-2">
+        {days.map((d) => {
+          const key = toDateKey(d);
+          const inMonth = d.getMonth() === month.getMonth();
+          const isPast = d < new Date(today.getFullYear(), today.getMonth(), today.getDate());
+          const isSelected = selectedKey === key;
+          const isToday = key === todayKey;
+
+          return (
+            <button
+              key={key}
+              type="button"
+              disabled={isPast}
+              onClick={() => onSelect(key)}
+              className={[
+                "h-10 rounded-xl border text-sm",
+                inMonth ? "" : "opacity-40",
+                isPast ? "opacity-35 cursor-not-allowed" : "hover:bg-white/10",
+                isSelected ? "bg-white text-black font-semibold" : "bg-transparent text-white",
+                isToday ? "border-blue-400/80" : "border-white/10",
+              ].join(" ")}
+              title={key}
+            >
+              {d.getDate()}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className={`mt-3 text-xs ${hint}`}>Past dates disabled. Today highlight blue border.</div>
+    </div>
   );
 }
 
@@ -798,9 +1093,7 @@ function Line({ k, v }) {
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="text-white/60 text-sm">{k}</div>
-      <div className="text-white text-sm text-right break-words max-w-[60%]">
-        {String(v ?? "").trim() || "-"}
-      </div>
+      <div className="text-white text-sm text-right break-words max-w-[60%]">{String(v ?? "").trim() || "-"}</div>
     </div>
   );
 }

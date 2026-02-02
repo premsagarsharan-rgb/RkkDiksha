@@ -9,12 +9,26 @@ export const runtime = "nodejs";
 function uniq(arr) {
   return Array.from(new Set(arr.map(String)));
 }
-
 function roleLabel(i) {
-  // A, B, C... (fallback M1..)
   const n = i + 1;
-  if (n <= 26) return String.fromCharCode(64 + n); // 1->A
+  if (n <= 26) return String.fromCharCode(64 + n);
   return `M${n}`;
+}
+function isDateKey(s) {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+function ymdLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+async function countReservedForContainer(db, dikshaContainerId) {
+  return db.collection("calendarAssignments").countDocuments({
+    occupiedContainerId: dikshaContainerId,
+    meetingDecision: "PENDING",
+    status: "IN_CONTAINER",
+  });
 }
 
 export async function POST(req, { params }) {
@@ -23,10 +37,9 @@ export async function POST(req, { params }) {
 
   const { containerId } = await params;
   const body = await req.json().catch(() => ({}));
-  const { customerIds, note, commitMessage } = body || {};
+  const { customerIds, note, commitMessage, occupyDate } = body || {};
 
   if (!commitMessage) return NextResponse.json({ error: "Commit required" }, { status: 400 });
-
   if (!Array.isArray(customerIds) || customerIds.length < 2) {
     return NextResponse.json({ error: "customerIds must be array (min 2)" }, { status: 400 });
   }
@@ -46,13 +59,73 @@ export async function POST(req, { params }) {
   const container = await db.collection("calendarContainers").findOne({ _id: ctnId });
   if (!container) return NextResponse.json({ error: "Container not found" }, { status: 404 });
 
-  const count = await db.collection("calendarAssignments").countDocuments({
+  // capacity check for this container
+  const inCount = await db.collection("calendarAssignments").countDocuments({
     containerId: ctnId,
     status: "IN_CONTAINER",
   });
 
-  if (count + ids.length > (container.limit || 20)) {
-    return NextResponse.json({ error: "HOUSEFULL" }, { status: 409 });
+  if (container.mode === "DIKSHA") {
+    const reservedCount = await countReservedForContainer(db, ctnId);
+    const used = inCount + reservedCount;
+    if (used + ids.length > (container.limit || 20)) {
+      return NextResponse.json({ error: "HOUSEFULL" }, { status: 409 });
+    }
+  } else {
+    if (inCount + ids.length > (container.limit || 20)) {
+      return NextResponse.json({ error: "HOUSEFULL" }, { status: 409 });
+    }
+  }
+
+  // ✅ MEETING occupy validation + DIKSHA capacity check
+  let occupiedContainerId = null;
+  let occupiedMode = null;
+  let occupiedDate = null;
+  let meetingDecision = null;
+
+  if (occupyDate != null) {
+    if (container.mode !== "MEETING") {
+      return NextResponse.json({ error: "occupyDate only allowed for MEETING containers" }, { status: 400 });
+    }
+    if (!isDateKey(occupyDate)) return NextResponse.json({ error: "Invalid occupyDate (YYYY-MM-DD)" }, { status: 400 });
+
+    const todayKey = ymdLocal(new Date());
+    if (occupyDate <= todayKey) return NextResponse.json({ error: "occupyDate must be future date" }, { status: 400 });
+
+    const key = { date: occupyDate, mode: "DIKSHA" };
+    await db.collection("calendarContainers").updateOne(
+      key,
+      {
+        $setOnInsert: {
+          date: occupyDate,
+          mode: "DIKSHA",
+          limit: 20,
+          createdByUserId: session.userId,
+          createdAt: now,
+        },
+        $set: { updatedAt: now },
+      },
+      { upsert: true }
+    );
+
+    const dikshaContainer = await db.collection("calendarContainers").findOne(key);
+    if (!dikshaContainer?._id) return NextResponse.json({ error: "Diksha container create failed" }, { status: 500 });
+
+    const dikshaIn = await db.collection("calendarAssignments").countDocuments({
+      containerId: dikshaContainer._id,
+      status: "IN_CONTAINER",
+    });
+    const dikshaReserved = await countReservedForContainer(db, dikshaContainer._id);
+    const dikshaUsed = dikshaIn + dikshaReserved;
+
+    if (dikshaUsed + ids.length > (dikshaContainer.limit || 20)) {
+      return NextResponse.json({ error: "HOUSEFULL" }, { status: 409 });
+    }
+
+    occupiedContainerId = dikshaContainer._id;
+    occupiedMode = "DIKSHA";
+    occupiedDate = occupyDate;
+    meetingDecision = "PENDING";
   }
 
   // all must be ACTIVE sitting
@@ -65,7 +138,6 @@ export async function POST(req, { params }) {
     }
   }
 
-  // pre-check (unique index also protects)
   const already = await db.collection("calendarAssignments").findOne({
     customerId: { $in: ids },
     status: "IN_CONTAINER",
@@ -77,7 +149,6 @@ export async function POST(req, { params }) {
   const pairId = new ObjectId();
   const kind = ids.length === 2 ? "COUPLE" : "FAMILY";
 
-  // IMPORTANT: stable sequence order -> createdAt increasing by 1ms
   const docs = ids.map((cid, i) => {
     const t = new Date(now.getTime() + i);
     return {
@@ -86,9 +157,14 @@ export async function POST(req, { params }) {
       note: String(note || "").trim(),
       status: "IN_CONTAINER",
 
-      kind,              // COUPLE or FAMILY
+      kind,
       pairId,
       roleInPair: roleLabel(i),
+
+      occupiedMode,
+      occupiedDate,
+      occupiedContainerId,
+      meetingDecision,
 
       addedByUserId: session.userId,
       createdAt: t,
@@ -105,7 +181,6 @@ export async function POST(req, { params }) {
     return NextResponse.json({ error: `${kind} assign failed` }, { status: 500 });
   }
 
-  // update all customers
   await db.collection("sittingCustomers").updateMany(
     { _id: { $in: ids } },
     { $set: { status: "IN_EVENT", activeContainerId: ctnId } }
@@ -119,9 +194,13 @@ export async function POST(req, { params }) {
     kind,
     groupSize: ids.length,
     customerIds: ids.map(String),
+
+    occupiedDate,
+    occupiedMode,
+    occupiedContainerId: occupiedContainerId ? String(occupiedContainerId) : null,
+    meetingDecision,
   };
 
-  // commits for EACH customer
   const action = kind === "FAMILY" ? "ASSIGN_FAMILY" : "ASSIGN_COUPLE";
   for (const cid of ids) {
     await addCommit({

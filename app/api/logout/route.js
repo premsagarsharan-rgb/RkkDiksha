@@ -12,10 +12,10 @@ function sha256(s) {
 
 export async function POST() {
   const session = await getSession();
+
   if (session?.userId && session?.sessionToken) {
     try {
       const db = await getDb();
-      // clear only if token matches
       await db.collection("users").updateOne(
         { _id: new ObjectId(session.userId), activeSessionTokenHash: sha256(session.sessionToken) },
         { $unset: { activeSessionTokenHash: "", activeSessionAt: "" } }

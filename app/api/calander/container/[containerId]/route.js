@@ -13,10 +13,12 @@ export async function GET(req, { params }) {
   const db = await getDb();
   const cId = new ObjectId(containerId);
 
+  const url = new URL(req.url);
+  const includeReserved = url.searchParams.get("includeReserved") === "1";
+
   const container = await db.collection("calendarContainers").findOne({ _id: cId });
   if (!container) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // IMPORTANT: include kind/pairId/roleInPair/createdAt (no breaking)
   const assignments = await db.collection("calendarAssignments").aggregate([
     { $match: { containerId: cId, status: "IN_CONTAINER" } },
     {
@@ -25,10 +27,10 @@ export async function GET(req, { params }) {
         localField: "customerId",
         foreignField: "_id",
         as: "customer",
-      }
+      },
     },
     { $unwind: "$customer" },
-    { $sort: { createdAt: 1 } }, // sequence stable
+    { $sort: { createdAt: 1 } },
     {
       $project: {
         _id: 1,
@@ -41,14 +43,67 @@ export async function GET(req, { params }) {
         pairId: 1,
         roleInPair: 1,
 
+        // meeting occupy fields
+        occupiedMode: 1,
+        occupiedDate: 1,
+        occupiedContainerId: 1,
+        meetingDecision: 1,
+
         addedByUserId: 1,
         createdAt: 1,
         updatedAt: 1,
 
         customer: 1,
-      }
-    }
+      },
+    },
   ]).toArray();
 
-  return NextResponse.json({ container, assignments });
+  let reserved = [];
+  if (includeReserved && container.mode === "DIKSHA") {
+    reserved = await db.collection("calendarAssignments").aggregate([
+      {
+        $match: {
+          occupiedContainerId: cId,
+          meetingDecision: "PENDING",
+          status: "IN_CONTAINER",
+        },
+      },
+      {
+        $lookup: {
+          from: "sittingCustomers",
+          localField: "customerId",
+          foreignField: "_id",
+          as: "customer",
+        },
+      },
+      { $unwind: "$customer" },
+      { $sort: { createdAt: 1 } },
+      {
+        $project: {
+          _id: 1,
+          containerId: 1,
+          customerId: 1,
+          status: 1,
+          note: 1,
+
+          kind: 1,
+          pairId: 1,
+          roleInPair: 1,
+
+          occupiedMode: 1,
+          occupiedDate: 1,
+          occupiedContainerId: 1,
+          meetingDecision: 1,
+
+          addedByUserId: 1,
+          createdAt: 1,
+          updatedAt: 1,
+
+          customer: 1,
+        },
+      },
+    ]).toArray();
+  }
+
+  return NextResponse.json({ container, assignments, reserved });
 }

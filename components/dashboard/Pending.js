@@ -3,6 +3,19 @@
 import { useEffect, useMemo, useState } from "react";
 import CustomerProfileModal from "@/components/CustomerProfileModal";
 
+function pickTs(c) {
+  // best guess fields
+  const t =
+    c?.pausedAt ||
+    c?.restoredAt ||
+    c?.createdAt ||
+    c?.updatedAt ||
+    null;
+
+  const ms = t ? new Date(t).getTime() : 0;
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 export default function Pending() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -10,7 +23,6 @@ export default function Pending() {
   const [openProfile, setOpenProfile] = useState(false);
   const [selected, setSelected] = useState(null);
 
-  // NEW: search (performance + usability)
   const [q, setQ] = useState("");
 
   async function load() {
@@ -25,24 +37,44 @@ export default function Pending() {
     load();
   }, []);
 
-  // NEW: memoized filter
-  const filtered = useMemo(() => {
+  const { recent24, older } = useMemo(() => {
     const term = String(q || "").trim().toLowerCase();
-    if (!term) return items;
+    const now = Date.now();
+    const limit = 24 * 60 * 60 * 1000;
 
-    return items.filter((c) => {
-      const name = String(c?.name || "").toLowerCase();
-      const roll = String(c?.rollNo || "").toLowerCase();
-      return name.includes(term) || roll.includes(term);
-    });
+    let arr = items;
+
+    if (term) {
+      arr = arr.filter((c) => {
+        const name = String(c?.name || "").toLowerCase();
+        const roll = String(c?.rollNo || "").toLowerCase();
+        return name.includes(term) || roll.includes(term);
+      });
+    }
+
+    const r = [];
+    const o = [];
+
+    for (const c of arr) {
+      const ts = pickTs(c);
+      if (ts && now - ts <= limit) r.push(c);
+      else o.push(c);
+    }
+
+    r.sort((a, b) => pickTs(b) - pickTs(a));
+    o.sort((a, b) => pickTs(b) - pickTs(a));
+
+    return { recent24: r, older: o };
   }, [items, q]);
+
+  const total = recent24.length + older.length;
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <h2 className="text-white font-semibold text-lg">
           Pending{" "}
-          <span className="text-white/50 text-sm">({filtered.length})</span>
+          <span className="text-white/50 text-sm">({total})</span>
         </h2>
 
         <div className="flex items-center gap-2">
@@ -64,31 +96,61 @@ export default function Pending() {
 
       {loading ? (
         <div className="text-white/60">Loading...</div>
-      ) : filtered.length === 0 ? (
+      ) : total === 0 ? (
         <div className="text-white/60">
-          {q.trim()
-            ? `No pending customers matching "${q.trim()}".`
-            : "No pending customers."}
+          {q.trim() ? `No pending customers matching "${q.trim()}".` : "No pending customers."}
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((c) => (
-            <button
-              key={c._id}
-              onClick={() => {
-                setSelected(c);
-                setOpenProfile(true);
-              }}
-              className="text-left rounded-2xl p-4 border border-white/10 bg-white/5 hover:bg-white/10 transition"
-            >
-              <div className="text-xs text-white/60">Pending Profile</div>
-              <div className="text-white font-semibold mt-1">{c.name}</div>
-              <div className="text-white/70 text-sm">Age: {c.age || "-"}</div>
-              <div className="mt-3 inline-flex px-2 py-1 rounded-full text-[11px] bg-yellow-500/20 border border-yellow-400/20 text-yellow-200">
-                Status: PENDING
+        <div className="space-y-5">
+          {recent24.length > 0 ? (
+            <div>
+              <div className="text-xs text-white/60 mb-2">
+                Recently (last 24 hours) — {recent24.length}
               </div>
-            </button>
-          ))}
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {recent24.map((c) => (
+                  <button
+                    key={c._id}
+                    onClick={() => { setSelected(c); setOpenProfile(true); }}
+                    className="text-left rounded-2xl p-4 border border-emerald-400/20 bg-emerald-500/10 hover:bg-emerald-500/15 transition"
+                  >
+                    <div className="text-xs text-white/70">Pending (Recent)</div>
+                    <div className="text-white font-semibold mt-1">{c.name}</div>
+                    <div className="text-white/70 text-sm">Age: {c.age || "-"}</div>
+                    <div className="mt-3 inline-flex px-2 py-1 rounded-full text-[11px] bg-yellow-500/20 border border-yellow-400/20 text-yellow-200">
+                      Status: PENDING
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {older.length > 0 ? (
+            <div>
+              <div className="text-xs text-white/60 mb-2">
+                Others — {older.length}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {older.map((c) => (
+                  <button
+                    key={c._id}
+                    onClick={() => { setSelected(c); setOpenProfile(true); }}
+                    className="text-left rounded-2xl p-4 border border-white/10 bg-white/5 hover:bg-white/10 transition"
+                  >
+                    <div className="text-xs text-white/60">Pending Profile</div>
+                    <div className="text-white font-semibold mt-1">{c.name}</div>
+                    <div className="text-white/70 text-sm">Age: {c.age || "-"}</div>
+                    <div className="mt-3 inline-flex px-2 py-1 rounded-full text-[11px] bg-yellow-500/20 border border-yellow-400/20 text-yellow-200">
+                      Status: PENDING
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
 

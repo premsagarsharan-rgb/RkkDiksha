@@ -25,17 +25,14 @@ export async function POST(req) {
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) return NextResponse.json({ error: "Invalid login" }, { status: 401 });
 
-  // ✅ new session token, replaces old -> old devices auto logout
   const sessionToken =
     typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
       : crypto.randomBytes(16).toString("hex");
 
-  const activeSessionTokenHash = sha256(sessionToken);
-
   await db.collection("users").updateOne(
     { _id: user._id },
-    { $set: { activeSessionTokenHash, activeSessionAt: new Date() } }
+    { $set: { activeSessionTokenHash: sha256(sessionToken), activeSessionAt: new Date() } }
   );
 
   await createSessionCookie({

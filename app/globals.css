@@ -26,3 +26,15 @@ body {
   75% { transform: translateX(-4px); }
   100% { transform: translateX(0); }
 }
+
+/* ✅ Light theme via invert (STRONG + consistent, applied on html root) */
+html.theme-light {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* ✅ Un-invert media so photos/videos look normal */
+html.theme-light img,
+html.theme-light video,
+html.theme-light iframe {
+  filter: invert(1) hue-rotate(180deg);
+}

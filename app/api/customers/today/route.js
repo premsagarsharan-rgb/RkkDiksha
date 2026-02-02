@@ -9,7 +9,7 @@ function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// IST date key: "YYYY-MM-DD"
+// IST date key: "YYYY-MM-DD" (Recent list ke liye)
 function getISTDateKey(d = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
@@ -24,33 +24,59 @@ function getISTDateKey(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
-async function ensureTodayIndexes(db) {
-  // submissionId dedupe (double-click protection)
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function formatRollNo(seq) {
+  // ✅ Your requested format: A01, A02, ...
+  return `A${pad2(seq)}`;
+}
+
+function normalizeRollQuery(q) {
+  const s = String(q || "").trim().toUpperCase();
+  if (!s) return null;
+
+  // allow: "A01", "a1", "1"
+  const m = s.match(/^A?(\d+)$/);
+  if (!m) return null;
+
+  const num = parseInt(m[1], 10);
+  if (!Number.isFinite(num) || num < 0) return null;
+
+  return { rollSeq: num, rollNo: formatRollNo(num) };
+}
+
+async function ensureIndexes(db) {
+  // submissionId dedupe
   try {
     await db.collection("todayCustomers").createIndex({ submissionId: 1 }, { unique: true });
   } catch {}
 
-  // roll number unique per day
+  // ✅ for faster search / sorting (NOT unique, because existing old data may have duplicates)
   try {
-    await db.collection("todayCustomers").createIndex(
-      { rollDate: 1, rollNo: 1 },
-      { unique: true }
-    );
+    await db.collection("todayCustomers").createIndex({ rollNo: 1 });
+  } catch {}
+  try {
+    await db.collection("todayCustomers").createIndex({ rollSeq: 1 });
+  } catch {}
+  try {
+    await db.collection("todayCustomers").createIndex({ rollDate: 1 });
   } catch {}
 
-  // counter unique per day
+  // ✅ global roll counter doc
   try {
-    await db.collection("dailyRollCounters").createIndex({ rollDate: 1 }, { unique: true });
+    await db.collection("globalRollCounters").createIndex({ _id: 1 }, { unique: true });
   } catch {}
 }
 
-async function allocateDailyRollNo(db, rollDate) {
+async function allocateGlobalRoll(db) {
   // Atomic increment (race-safe)
-  const r = await db.collection("dailyRollCounters").findOneAndUpdate(
-    { rollDate },
+  const r = await db.collection("globalRollCounters").findOneAndUpdate(
+    { _id: "CUSTOMER_ROLL_A" },
     {
       $inc: { seq: 1 },
-      $setOnInsert: { rollDate, createdAt: new Date() },
+      $setOnInsert: { createdAt: new Date() },
       $set: { updatedAt: new Date() },
     },
     { upsert: true, returnDocument: "after" }
@@ -59,13 +85,9 @@ async function allocateDailyRollNo(db, rollDate) {
   const doc = r?.value || r;
   const seq = doc?.seq;
 
-  if (!Number.isInteger(seq)) return null;
+  if (!Number.isInteger(seq) || seq < 1) return null;
 
-  // OPTIONAL: daily limit (tumhara old system 1..500 tha)
-  // Agar tum daily unlimited chahte ho to ye block hata dena.
-  if (seq > 500) return "ROLL_LIMIT_REACHED";
-
-  return seq;
+  return { rollSeq: seq, rollNo: formatRollNo(seq) };
 }
 
 export async function GET(req) {
@@ -76,19 +98,30 @@ export async function GET(req) {
   const q = (searchParams.get("q") || "").trim();
 
   const db = await getDb();
+  await ensureIndexes(db);
 
-  // ✅ Default: only today's recent customers
+  // Default: Recent = only today's entries
   const rollDate = getISTDateKey();
   const filter = { rollDate };
 
   if (q) {
     const or = [];
-    const num = Number(q);
-    if (Number.isInteger(num)) or.push({ rollNo: num });
+    const roll = normalizeRollQuery(q);
+
+    if (roll) {
+      // exact match by rollNo (A01) or rollSeq (1)
+      or.push({ rollNo: roll.rollNo });
+      or.push({ rollSeq: roll.rollSeq });
+    }
 
     const rx = new RegExp(escapeRegex(q), "i");
     or.push({ name: rx });
-    or.push({ pincode: rx });
+    or.push({ address: rx });
+    or.push({ city: rx });
+    or.push({ state: rx });
+    or.push({ country: rx });
+    or.push({ remarks: rx });
+    or.push({ pincode: rx }); // older docs compatibility
 
     filter.$or = or;
   }
@@ -107,32 +140,51 @@ export async function POST(req) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await req.json();
+  const body = await req.json().catch(() => ({}));
 
   const {
     submissionId,
     commitMessage,
 
+    // basic
     name,
     age,
+    gender = "OTHER",
+
+    // address (old + new)
     address,
+    country,
+    state,
+    city,
+
+    // new fields
+    occupation,
+    note,
+    approver,
+    maritalStatus,
+    remarks,
+    remarksBy,
+
+    // family permission
+    familyPermission,
+    familyPermissionRelation,
+    familyPermissionOther,
+
+    // legacy optional fields
     followYears,
     clubVisitsBefore,
     monthYear,
     onionGarlic,
     hasPet,
     hadTeacherBefore,
-    familyPermission,
-    gender = "OTHER",
-
     pincode,
   } = body || {};
 
   if (!submissionId) return NextResponse.json({ error: "Missing submissionId" }, { status: 400 });
   if (!commitMessage) return NextResponse.json({ error: "Commit required" }, { status: 400 });
 
-  if (!name || !age || !address) {
-    return NextResponse.json({ error: "Missing required fields (name, age, address)" }, { status: 400 });
+  if (!name || !age) {
+    return NextResponse.json({ error: "Missing required fields (name, age)" }, { status: 400 });
   }
 
   if (!["MALE", "FEMALE", "OTHER"].includes(gender)) {
@@ -140,9 +192,9 @@ export async function POST(req) {
   }
 
   const db = await getDb();
-  await ensureTodayIndexes(db);
+  await ensureIndexes(db);
 
-  // ✅ submissionId dedupe: agar same submissionId already hai to wahi return
+  // submissionId dedupe
   const existing = await db.collection("todayCustomers").findOne({ submissionId });
   if (existing) {
     return NextResponse.json({
@@ -150,43 +202,73 @@ export async function POST(req) {
       deduped: true,
       id: String(existing._id),
       rollNo: existing.rollNo ?? null,
+      rollSeq: existing.rollSeq ?? null,
       rollDate: existing.rollDate ?? null,
     });
   }
 
-  const rollDate = getISTDateKey();
+  // ✅ lifetime unique roll (no daily reset)
+  const roll = await allocateGlobalRoll(db);
+  if (!roll) return NextResponse.json({ error: "ROLL_ALLOCATE_FAILED" }, { status: 500 });
 
-  // ✅ daily roll no allocate
-  const rollNo = await allocateDailyRollNo(db, rollDate);
-  if (!rollNo) return NextResponse.json({ error: "ROLL_ALLOCATE_FAILED" }, { status: 500 });
-  if (rollNo === "ROLL_LIMIT_REACHED") {
-    return NextResponse.json({ error: "ROLL_LIMIT_REACHED (1..500 per day)" }, { status: 409 });
+  const rollDate = getISTDateKey();
+  const now = new Date();
+
+  // address fallback (if not sent)
+  const computedAddress =
+    String(address || "").trim() ||
+    [city, state, country || "India"].map((x) => String(x || "").trim()).filter(Boolean).join(", ");
+
+  if (!computedAddress) {
+    return NextResponse.json({ error: "Missing address (country/state/city or address)" }, { status: 400 });
   }
 
   const doc = {
     submissionId,
 
-    rollDate, // ✅ important for daily uniqueness
-    rollNo,   // ✅ 1..n daily
+    // ✅ global unique roll
+    rollNo: roll.rollNo,     // "A01"
+    rollSeq: roll.rollSeq,   // 1
+    rollDate,                // only for "Recent(today)" filtering
 
     name: String(name).trim(),
     age: String(age).trim(),
-    address: String(address).trim(),
+    gender,
+
+    // new structured address
+    country: String(country || "India").trim() || "India",
+    state: String(state || "").trim(),
+    city: String(city || "").trim(),
+
+    // compatibility address
+    address: computedAddress,
+
+    occupation: String(occupation || "").trim(),
+    note: String(note || "").trim(),
+    approver: String(approver || "").trim(),
+    maritalStatus: String(maritalStatus || "").trim(),
+
+    // remarks (auto user/admin)
+    remarks: String(remarks || remarksBy || session.username || "").trim(),
+    remarksBy: String(remarksBy || session.username || "").trim(),
+
+    familyPermission: !!familyPermission,
+    familyPermissionRelation: String(familyPermissionRelation || "").trim(),
+    familyPermissionOther: String(familyPermissionOther || "").trim(),
+
     followYears: String(followYears || "").trim(),
     clubVisitsBefore: String(clubVisitsBefore || "").trim(),
     monthYear: String(monthYear || "").trim(),
     onionGarlic: !!onionGarlic,
     hasPet: !!hasPet,
     hadTeacherBefore: !!hadTeacherBefore,
-    familyPermission: !!familyPermission,
-    gender,
 
-    pincode: String(pincode || "").trim(),
+    pincode: String(pincode || "").trim(), // legacy
 
     status: "RECENT",
     source: "MANUAL",
     createdByUserId: session.userId,
-    createdAt: new Date(),
+    createdAt: now,
   };
 
   try {
@@ -200,14 +282,13 @@ export async function POST(req) {
       actorLabel,
       message: commitMessage,
       action: "CREATE_RECENT",
-      meta: { source: doc.source, rollNo, rollDate },
+      meta: { source: doc.source, rollNo: doc.rollNo, rollSeq: doc.rollSeq },
     });
 
-    return NextResponse.json({ ok: true, id: String(r.insertedId), rollNo, rollDate });
+    return NextResponse.json({ ok: true, id: String(r.insertedId), rollNo: doc.rollNo, rollSeq: doc.rollSeq, rollDate });
   } catch (e) {
-    // If indexes hit duplicate (rare race), show meaningful error
     if (String(e?.code) === "11000") {
-      return NextResponse.json({ error: "DUPLICATE (submissionId/rollNo)" }, { status: 409 });
+      return NextResponse.json({ error: "DUPLICATE (submissionId)" }, { status: 409 });
     }
     return NextResponse.json({ error: "Create failed" }, { status: 500 });
   }

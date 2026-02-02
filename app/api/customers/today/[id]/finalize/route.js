@@ -25,23 +25,29 @@ export async function POST(req, { params }) {
   // Merge updates (final form data)
   const merged = { ...today, ...(updates || {}) };
 
+  // ✅ IMPORTANT: RollNo lifetime unique => never modify, never suffix
+  // also protect against client sending rollNo in updates
+  merged.rollNo = today.rollNo;
+  merged.rollSeq = today.rollSeq;
+
   // basic sanitize
   merged.name = String(merged.name || "").trim();
   merged.age = String(merged.age || "").trim();
   merged.address = String(merged.address || "").trim();
   merged.pincode = String(merged.pincode || "").trim();
 
-  // ✅ RollNo: keep same but Sitting me "S" suffix
-  const rollNoBase = String(merged.rollNo ?? "").trim().replace(/S$/i, "");
-  const rollNoSitting = rollNoBase ? `${rollNoBase}S` : "S";
+  merged.country = String(merged.country || "").trim();
+  merged.state = String(merged.state || "").trim();
+  merged.city = String(merged.city || "").trim();
 
-  // Move to sitting
+  // Move to sitting (same _id)
   await db.collection("sittingCustomers").insertOne({
     ...merged,
     _id,
 
-    rollNoBase,          // NEW (original)
-    rollNo: rollNoSitting, // UPDATED (with S)
+    // ✅ keep same rollNo everywhere
+    rollNo: merged.rollNo,
+    rollSeq: merged.rollSeq,
 
     status: "ACTIVE",
     activeContainerId: null,
@@ -60,8 +66,11 @@ export async function POST(req, { params }) {
     actorLabel,
     message: commitMessage,
     action: "FINALIZE_TO_SITTING",
-    meta: { rollNo: rollNoSitting, rollNoBase: rollNoBase || null },
+    meta: {
+      rollNo: merged.rollNo || null,
+      rollSeq: merged.rollSeq || null,
+    },
   });
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, rollNo: merged.rollNo || null });
 }

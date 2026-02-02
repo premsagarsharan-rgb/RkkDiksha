@@ -13,6 +13,9 @@ export default function LayerModal({
   maxWidth = "max-w-6xl",
   layerName = "",
   zIndexBoost = 0,
+
+  // ✅ prevent outside click/touch close
+  disableBackdropClose = false,
 }) {
   const stackApi = useLayerStack();
 
@@ -61,11 +64,14 @@ export default function LayerModal({
     <div
       className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
       style={{ zIndex }}
-      onMouseDown={(e) => {
+      onPointerDown={(e) => {
+        if (disableBackdropClose) return;
         if (e.target === e.currentTarget) onClose?.();
       }}
     >
-      <div className={`w-full ${maxWidth} rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_0_70px_rgba(59,130,246,0.12)] overflow-hidden`}>
+      <div
+        className={`w-full ${maxWidth} rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_0_70px_rgba(59,130,246,0.12)] overflow-hidden`}
+      >
         <div className="sticky top-0 z-10 border-b border-white/10 bg-black/25 backdrop-blur-xl">
           <div className="p-4 flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -84,6 +90,7 @@ export default function LayerModal({
               onClick={onClose}
               className="shrink-0 w-11 h-11 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white/80 text-2xl leading-none"
               title="Close"
+              type="button"
             >
               ×
             </button>

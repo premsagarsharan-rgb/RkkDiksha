@@ -10,8 +10,6 @@ export default function RecentCustomer() {
   const [openProfile, setOpenProfile] = useState(false);
   const [selected, setSelected] = useState(null);
 
-  const [initialEditMode, setInitialEditMode] = useState(false);
-
   const [q, setQ] = useState("");
 
   const queryUrl = useMemo(() => {
@@ -27,26 +25,21 @@ export default function RecentCustomer() {
     setLoading(false);
   }
 
-  useEffect(() => {
-    load();
-  }, []); // initial
+  useEffect(() => { load(); }, []);
 
-  // debounce search
   useEffect(() => {
     const t = setTimeout(() => load(queryUrl), 250);
     return () => clearTimeout(t);
   }, [queryUrl]);
 
-  function open(c, { edit = false } = {}) {
+  function open(c) {
     setSelected(c);
-    setInitialEditMode(Boolean(edit));
     setOpenProfile(true);
   }
 
   function close() {
     setOpenProfile(false);
     setSelected(null);
-    setInitialEditMode(false);
   }
 
   return (
@@ -82,7 +75,7 @@ export default function RecentCustomer() {
           {items.map((c) => (
             <div
               key={c._id}
-              onClick={() => open(c, { edit: false })}
+              onClick={() => open(c)}
               className="text-left rounded-2xl p-4 border border-white/10 bg-white/5 hover:bg-white/10 transition shadow-[0_0_30px_rgba(59,130,246,0.10)] cursor-pointer"
             >
               <div className="flex items-start justify-between gap-2">
@@ -96,25 +89,11 @@ export default function RecentCustomer() {
                   <div className="px-2 py-1 rounded-full bg-white/10 border border-white/10 text-white text-xs font-semibold">
                     {c.rollNo || "—"}
                   </div>
-
-                  {/* Edit button (stops card click) */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      open(c, { edit: true });
-                    }}
-                    className="mt-2 px-2 py-1 rounded-full bg-white text-black text-[11px] font-semibold"
-                    title="Edit (Step-1 + Step-2) → Save Edit → Confirm → Commit → Move to Sitting"
-                  >
-                    Edit
-                  </button>
                 </div>
               </div>
 
               <div className="text-white/70 text-sm mt-2">Age: {c.age || "-"}</div>
-              <div className="text-white/60 text-xs mt-1 line-clamp-2">
-                Address: {c.address || "-"}
-              </div>
+              <div className="text-white/60 text-xs mt-1 line-clamp-2">Address: {c.address || "-"}</div>
               <div className="text-white/60 text-xs mt-1">Pincode: {c.pincode || "-"}</div>
 
               <div className="mt-3 inline-flex px-2 py-1 rounded-full text-[11px] bg-white/10 border border-white/10 text-white/80">
@@ -131,7 +110,6 @@ export default function RecentCustomer() {
         customer={selected}
         source="TODAY"
         onChanged={() => load(queryUrl)}
-        initialEditMode={initialEditMode}
       />
     </div>
   );

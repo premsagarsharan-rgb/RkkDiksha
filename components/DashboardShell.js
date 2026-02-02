@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import LayerModal from "@/components/LayerModal";
+import ThemeToggle from "@/components/ThemeToggle";
+import { useTheme } from "@/components/ThemeProvider";
 
 import RecentCustomer from "@/components/dashboard/RecentCustomer";
 import AddCustomer from "@/components/dashboard/AddCustomer";
@@ -10,11 +12,20 @@ import Pending from "@/components/dashboard/Pending";
 import SittingData from "@/components/dashboard/SittingData";
 import UserCreate from "@/components/dashboard/UserCreate";
 import UserManage from "@/components/dashboard/UserManage";
+import CustomerLocationTracker from "@/components/dashboard/CustomerLocationTracker";
 
 export default function DashboardShell({ session }) {
+  const themeApi = useTheme();
+  const isLight = themeApi?.theme === "light";
+
   const isAdmin = session.role === "ADMIN";
   const perms = session.permissions || {
-    recent: true, add: true, calander: true, pending: true, sitting: false,
+    recent: true,
+    add: true,
+    calander: true,
+    pending: true,
+    sitting: false,
+    tracker: false,
   };
 
   const can = (key) => (isAdmin ? true : !!perms[key]);
@@ -27,6 +38,8 @@ export default function DashboardShell({ session }) {
     if (can("pending")) t.push({ key: "pending", title: "Pending", sub: "Paused", C: Pending });
     if (can("sitting")) t.push({ key: "sitting", title: "Sitting", sub: "ACTIVE", C: SittingData });
 
+    if (isAdmin || can("tracker")) t.push({ key: "tracker", title: "Tracker", sub: "Where is customer now?", C: CustomerLocationTracker });
+
     if (isAdmin) t.push({ key: "usercreate", title: "User Create", sub: "Create employee", C: UserCreate });
     if (isAdmin) t.push({ key: "usermanage", title: "User Manage", sub: "Permissions", C: UserManage });
 
@@ -34,13 +47,32 @@ export default function DashboardShell({ session }) {
   }, [isAdmin, perms]);
 
   const [openKey, setOpenKey] = useState(null);
-  const active = tiles.find(t => t.key === openKey);
+  const active = tiles.find((t) => t.key === openKey);
   const ActiveComp = active?.C;
+
+  // ✅ Light mode me blue glow invert hoke orange ho jata hai.
+  // Invert filter ke baad same blue glow chahiye, to light mode me "pre-inverted" orange use karo.
+  const tileGlow = isLight
+    ? "0 0 55px rgba(196,125,9,0.10)" // inverted => blue-ish
+    : "0 0 55px rgba(59,130,246,0.10)";
+
+  // ✅ Light mode me dashboard surfaces thode stronger chahiye (invert ke baad contrast badhe)
+  const topbarCls = isLight
+    ? "border-b border-white/20 bg-white/20 backdrop-blur-xl"
+    : "border-b border-white/10 bg-black/25 backdrop-blur-xl";
+
+  const buttonCls = isLight
+    ? "px-4 py-2 rounded-2xl bg-white/20 border border-white/20 hover:bg-white/25 transition"
+    : "px-4 py-2 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15 transition";
+
+  const tileCls = isLight
+    ? "text-left rounded-3xl border border-white/18 bg-white/12 backdrop-blur-xl p-5 hover:bg-white/18 transition"
+    : "text-left rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl p-5 hover:bg-white/10 transition";
 
   return (
     <div className="min-h-screen text-white">
       {/* Top */}
-      <div className="sticky top-0 z-40 border-b border-white/10 bg-black/25 backdrop-blur-xl">
+      <div className={`sticky top-0 z-40 ${topbarCls}`}>
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
           <div>
             <div className="text-xs text-white/60">Premium Dashboard</div>
@@ -52,12 +84,16 @@ export default function DashboardShell({ session }) {
               <div className="text-sm font-semibold">{session.username}</div>
               <div className="text-xs text-white/60">{session.role}</div>
             </div>
+
+            <ThemeToggle />
+
             <button
-              className="px-4 py-2 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15 transition"
+              className={buttonCls}
               onClick={async () => {
                 await fetch("/api/auth/logout", { method: "POST" });
                 window.location.href = "/login";
               }}
+              type="button"
             >
               Logout
             </button>
@@ -72,7 +108,9 @@ export default function DashboardShell({ session }) {
             <button
               key={t.key}
               onClick={() => setOpenKey(t.key)}
-              className="text-left rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl p-5 hover:bg-white/10 transition shadow-[0_0_55px_rgba(59,130,246,0.10)]"
+              className={tileCls}
+              style={{ boxShadow: tileGlow }}
+              type="button"
             >
               <div className="text-xs text-white/60">{t.sub}</div>
               <div className="text-xl font-bold mt-1">{t.title}</div>
