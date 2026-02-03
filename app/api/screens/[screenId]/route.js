@@ -6,6 +6,8 @@ import crypto from "crypto";
 
 export const runtime = "nodejs";
 
+const ALPH = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
 function safeStr(x) {
   return String(x || "").trim();
 }
@@ -15,15 +17,21 @@ function newSlideId() {
 function isValidDateKey(s) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
 }
-function genViewCode() {
-  const s = crypto.randomBytes(5).toString("hex").toUpperCase();
-  return `SV-${s}`;
+
+function genViewCode5() {
+  const bytes = crypto.randomBytes(5);
+  let out = "";
+  for (let i = 0; i < 5; i++) out += ALPH[bytes[i] % ALPH.length];
+  return out;
 }
-function validateViewCode(code) {
-  const c = safeStr(code);
-  if (c.length < 4 || c.length > 32) return null;
-  // allow only letters/numbers/-/_
-  if (!/^[A-Za-z0-9\-_]+$/.test(c)) return null;
+
+function validateViewCode5(code) {
+  const c = safeStr(code).toUpperCase();
+  if (c.length !== 5) return null;
+  // only allowed alphabet
+  for (const ch of c) {
+    if (!ALPH.includes(ch)) return null;
+  }
   return c;
 }
 
@@ -64,6 +72,14 @@ export async function GET(req, { params }) {
   const isOwner = String(s.createdByUserId || "") === String(session.userId || "");
   if (!isOwner) return NextResponse.json({ error: "Locked (creator only). Use viewCode to view." }, { status: 403 });
 
+  const settings = {
+    cardStyle: s?.settings?.cardStyle || "movie",
+    autoplay: false,
+    showControls: true,
+    showProgress: false,
+    theme: s?.settings?.theme || "aurora",
+  };
+
   return NextResponse.json({
     screen: {
       _id: String(s._id),
@@ -76,7 +92,7 @@ export async function GET(req, { params }) {
       viewCode: s.viewCode || null,
       viewCodeUpdatedAt: s.viewCodeUpdatedAt || null,
 
-      settings: s.settings || { intervalMs: 3500, cardStyle: "movie", autoplay: true, showControls: true, showProgress: true, theme: "aurora" },
+      settings,
 
       slides: (s.slides || []).map((sl) => ({
         slideId: sl.slideId,
@@ -91,17 +107,6 @@ export async function GET(req, { params }) {
   });
 }
 
-/**
- * PATCH actions (creator only):
- * - rename: {action:"rename", title}
- * - settings: {action:"settings", settings:{intervalMs, cardStyle, autoplay, showControls, showProgress, theme}}
- * - setViewCode: {action:"setViewCode", viewCode}   (creator can set custom)
- * - regenViewCode: {action:"regenViewCode"}         (creator can regenerate)
- * - addSlide: {action:"addSlide", customerId OR customerIds[], kind, origin}
- * - removeSlide: {action:"removeSlide", slideId}
- * - clearSlides: {action:"clearSlides"}
- * - moveSlide: {action:"moveSlide", slideId, dir:"up"|"down"}
- */
 export async function PATCH(req, { params }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -129,30 +134,34 @@ export async function PATCH(req, { params }) {
   }
 
   if (action === "settings") {
+    const prev = screen.settings || {};
     const s = body?.settings || {};
-    const intervalMs = Number(s.intervalMs || 3500);
-    const autoplay = Boolean(s.autoplay);
-    const showControls = Boolean(s.showControls);
-    const showProgress = Boolean(s.showProgress);
-    const cardStyle = safeStr(s.cardStyle || "movie");
-    const theme = safeStr(s.theme || "aurora");
 
-    if (!Number.isFinite(intervalMs) || intervalMs < 1200 || intervalMs > 20000) {
-      return NextResponse.json({ error: "intervalMs invalid (1200..20000)" }, { status: 400 });
-    }
+    const cardStyle = safeStr(s.cardStyle || prev.cardStyle || "movie");
+    const theme = safeStr(s.theme || prev.theme || "aurora");
+
     if (!["movie", "compact"].includes(cardStyle)) return NextResponse.json({ error: "cardStyle invalid" }, { status: 400 });
     if (!["aurora", "blue", "purple", "emerald"].includes(theme)) return NextResponse.json({ error: "theme invalid" }, { status: 400 });
 
+    // ✅ manual only forced
+    const nextSettings = {
+      cardStyle,
+      theme,
+      autoplay: false,
+      showControls: true,
+      showProgress: false,
+    };
+
     await db.collection("presentationScreens").updateOne(
       { _id },
-      { $set: { settings: { intervalMs, autoplay, showControls, showProgress, cardStyle, theme }, updatedAt: now } }
+      { $set: { settings: nextSettings, updatedAt: now } }
     );
     return NextResponse.json({ ok: true });
   }
 
   if (action === "setViewCode") {
-    const v = validateViewCode(body?.viewCode);
-    if (!v) return NextResponse.json({ error: "Invalid viewCode (4..32, A-Z/0-9/-/_)" }, { status: 400 });
+    const v = validateViewCode5(body?.viewCode);
+    if (!v) return NextResponse.json({ error: "Invalid viewCode (exactly 5 chars)" }, { status: 400 });
 
     try {
       await db.collection("presentationScreens").createIndex({ viewCodeLower: 1 }, { unique: true, sparse: true });
@@ -178,8 +187,8 @@ export async function PATCH(req, { params }) {
     } catch {}
 
     let viewCode = null;
-    for (let i = 0; i < 6; i++) {
-      const c = genViewCode();
+    for (let i = 0; i < 30; i++) {
+      const c = genViewCode5();
       const exists = await db.collection("presentationScreens").findOne(
         { viewCodeLower: c.toLowerCase(), _id: { $ne: _id } },
         { projection: { _id: 1 } }
@@ -200,11 +209,8 @@ export async function PATCH(req, { params }) {
     const origin = body?.origin || null;
 
     let ids = [];
-    if (Array.isArray(body?.customerIds) && body.customerIds.length) {
-      ids = body.customerIds.map(safeStr).filter(Boolean);
-    } else if (body?.customerId) {
-      ids = [safeStr(body.customerId)];
-    }
+    if (Array.isArray(body?.customerIds) && body.customerIds.length) ids = body.customerIds.map(safeStr).filter(Boolean);
+    else if (body?.customerId) ids = [safeStr(body.customerId)];
 
     if (!ids.length) return NextResponse.json({ error: "customerId/customerIds required" }, { status: 400 });
     if (!["SINGLE", "COUPLE", "FAMILY"].includes(kind)) return NextResponse.json({ error: "Invalid kind" }, { status: 400 });
@@ -242,7 +248,6 @@ export async function PATCH(req, { params }) {
   if (action === "removeSlide") {
     const slideId = safeStr(body?.slideId);
     if (!slideId) return NextResponse.json({ error: "slideId required" }, { status: 400 });
-
     await db.collection("presentationScreens").updateOne(
       { _id },
       { $pull: { slides: { slideId } }, $set: { updatedAt: now } }

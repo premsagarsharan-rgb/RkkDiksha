@@ -25,7 +25,7 @@ function SlideMovie({ slide }) {
   if (snaps.length <= 1) {
     const s = snaps[0] || {};
     return (
-      <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-black/45 via-white/5 to-black/45 p-8 shadow-[0_0_90px_rgba(59,130,246,0.14)] fade-up">
+      <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-black/45 via-white/5 to-black/45 p-8 shadow-[0_0_90px_rgba(59,130,246,0.14)]">
         <div className="text-[11px] text-white/60 tracking-widest">SYSBYTE • PRESENTATION</div>
         <div className="mt-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -53,9 +53,8 @@ function SlideMovie({ slide }) {
   }
 
   return (
-    <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-black/45 via-white/5 to-black/45 p-8 shadow-[0_0_90px_rgba(168,85,247,0.12)] fade-up">
+    <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-black/45 via-white/5 to-black/45 p-8 shadow-[0_0_90px_rgba(168,85,247,0.12)]">
       <div className="text-[11px] text-white/60 tracking-widest">SYSBYTE • GROUP</div>
-
       <div className="mt-2 flex items-center justify-between gap-3">
         <div className="text-2xl font-extrabold">{kind} • {snaps.length} Members</div>
         <div className="text-xs text-white/60">One slide (group)</div>
@@ -85,8 +84,6 @@ export default function ScreenViewClient({ viewCode, embedded = false }) {
   const [screen, setScreen] = useState(null);
   const [loading, setLoading] = useState(true);
   const [idx, setIdx] = useState(0);
-  const [playing, setPlaying] = useState(true);
-  const [barKey, setBarKey] = useState(0);
 
   async function load() {
     setLoading(true);
@@ -110,10 +107,6 @@ export default function ScreenViewClient({ viewCode, embedded = false }) {
   }, [viewCode]);
 
   const slides = screen?.slides || [];
-  const intervalMs = Number(screen?.settings?.intervalMs || 3500);
-  const autoplay = screen?.settings?.autoplay !== false;
-  const showControls = screen?.settings?.showControls !== false;
-  const showProgress = screen?.settings?.showProgress !== false;
   const theme = screen?.settings?.theme || "aurora";
 
   useEffect(() => {
@@ -121,31 +114,38 @@ export default function ScreenViewClient({ viewCode, embedded = false }) {
     if (idx >= slides.length) setIdx(0);
   }, [slides.length, idx]);
 
-  useEffect(() => {
-    if (!slides.length) return;
-    if (!playing || !autoplay) return;
-
-    const t = setInterval(() => {
-      setIdx((i) => (i + 1) % slides.length);
-    }, intervalMs);
-
-    return () => clearInterval(t);
-  }, [slides.length, intervalMs, playing, autoplay]);
-
-  useEffect(() => { setBarKey((k) => k + 1); }, [idx, slides.length, intervalMs]);
-
   const current = slides[idx] || null;
   const bg = useMemo(() => themeBg(theme), [theme]);
 
-  const Wrapper = ({ children }) => (
+  // ✅ Keyboard support: ArrowLeft/ArrowRight
+  useEffect(() => {
+    function onKeyDown(e) {
+      const tag = e?.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      if (!slides.length) return;
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setIdx((i) => Math.max(0, i - 1));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setIdx((i) => (slides.length ? (i + 1) % slides.length : 0));
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [slides.length]);
+
+  const Wrapper = ({ children }) =>
     embedded ? (
       <div className={`rounded-3xl ${bg} p-4 sm:p-6`}>{children}</div>
     ) : (
       <div className={`min-h-screen ${bg} text-white`}>
         <div className="max-w-6xl mx-auto p-4 sm:p-6">{children}</div>
       </div>
-    )
-  );
+    );
 
   return (
     <Wrapper>
@@ -156,38 +156,30 @@ export default function ScreenViewClient({ viewCode, embedded = false }) {
           <div className="text-xs text-white/50 truncate">
             {screen?.title ? `${screen.title} • By ${screen.createdByUsername || "—"}` : ""}
           </div>
+          <div className="text-[11px] text-white/50 mt-1">
+            Keyboard: ← Prev • → Next
+          </div>
         </div>
 
-        {showControls ? (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={!slides.length}
-              onClick={() => setIdx((i) => Math.max(0, i - 1))}
-              className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
-            >
-              Prev
-            </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!slides.length}
+            onClick={() => setIdx((i) => Math.max(0, i - 1))}
+            className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
+          >
+            Prev
+          </button>
 
-            <button
-              type="button"
-              disabled={!slides.length}
-              onClick={() => setPlaying((v) => !v)}
-              className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
-            >
-              {playing ? "Pause" : "Play"}
-            </button>
-
-            <button
-              type="button"
-              disabled={!slides.length}
-              onClick={() => setIdx((i) => (slides.length ? (i + 1) % slides.length : 0))}
-              className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
-            >
-              Next
-            </button>
-          </div>
-        ) : null}
+          <button
+            type="button"
+            disabled={!slides.length}
+            onClick={() => setIdx((i) => (slides.length ? (i + 1) % slides.length : 0))}
+            className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
+          >
+            Next
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -199,40 +191,14 @@ export default function ScreenViewClient({ viewCode, embedded = false }) {
       ) : !current ? (
         <div className="rounded-3xl border border-white/10 bg-white/5 p-12 text-center">
           <div className="text-2xl font-bold">Screen Blank</div>
-          <div className="text-white/60 text-sm mt-2">
-            Creator card push karega tab slides yahan show hongi.
-          </div>
+          <div className="text-white/60 text-sm mt-2">Creator card push karega tab slides show hongi.</div>
         </div>
       ) : (
         <>
           <SlideMovie slide={current} />
-
-          {showProgress ? (
-            <div className="mt-4">
-              <div className="h-2 rounded-full bg-white/10 border border-white/10 overflow-hidden">
-                <div
-                  key={barKey}
-                  className="h-full bg-white/70"
-                  style={{ width: "0%", animation: `progressFill ${intervalMs}ms linear forwards` }}
-                />
-              </div>
-
-              <style jsx global>{`
-                @keyframes progressFill {
-                  from { width: 0%; }
-                  to { width: 100%; }
-                }
-              `}</style>
-
-              <div className="mt-2 text-xs text-white/60">
-                Slide {idx + 1}/{slides.length} • Interval {intervalMs}ms
-              </div>
-            </div>
-          ) : (
-            <div className="mt-2 text-xs text-white/60">
-              Slide {idx + 1}/{slides.length}
-            </div>
-          )}
+          <div className="mt-2 text-xs text-white/60">
+            Slide {idx + 1}/{slides.length}
+          </div>
         </>
       )}
     </Wrapper>

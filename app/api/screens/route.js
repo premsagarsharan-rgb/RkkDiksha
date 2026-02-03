@@ -5,10 +5,16 @@ import crypto from "crypto";
 
 export const runtime = "nodejs";
 
-function genViewCode() {
-  // Example: SV-8F2KQ7H9 (easy to type)
-  const s = crypto.randomBytes(5).toString("hex").toUpperCase(); // 10 chars
-  return `SV-${s}`;
+// 5-char code alphabet (no 0,1,O,I,L) -> easy read
+const ALPH = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+function genViewCode5() {
+  const bytes = crypto.randomBytes(5);
+  let out = "";
+  for (let i = 0; i < 5; i++) {
+    out += ALPH[bytes[i] % ALPH.length];
+  }
+  return out; // e.g. A2K9F
 }
 
 export async function GET() {
@@ -17,7 +23,6 @@ export async function GET() {
 
   const db = await getDb();
 
-  // ✅ list only OWN screens (locked)
   const items = await db
     .collection("presentationScreens")
     .find({ createdByUserId: session.userId })
@@ -49,16 +54,17 @@ export async function POST(req) {
   const db = await getDb();
   const now = new Date();
 
-  // unique index for viewCodeLower (create once)
   try {
     await db.collection("presentationScreens").createIndex({ viewCodeLower: 1 }, { unique: true, sparse: true });
   } catch {}
 
-  // generate unique viewCode (retry)
   let viewCode = null;
-  for (let i = 0; i < 6; i++) {
-    const c = genViewCode();
-    const exists = await db.collection("presentationScreens").findOne({ viewCodeLower: c.toLowerCase() }, { projection: { _id: 1 } });
+  for (let i = 0; i < 20; i++) {
+    const c = genViewCode5();
+    const exists = await db.collection("presentationScreens").findOne(
+      { viewCodeLower: c.toLowerCase() },
+      { projection: { _id: 1 } }
+    );
     if (!exists) { viewCode = c; break; }
   }
   if (!viewCode) return NextResponse.json({ error: "VIEWCODE_ALLOCATE_FAILED" }, { status: 500 });
@@ -70,22 +76,19 @@ export async function POST(req) {
     createdAt: now,
     updatedAt: now,
 
-    // ✅ lock code
     viewCode,
     viewCodeLower: viewCode.toLowerCase(),
     viewCodeUpdatedAt: now,
 
-    // cinematic settings
+    // ✅ manual only
     settings: {
-      intervalMs: 3500,
-      cardStyle: "movie", // movie | compact
-      autoplay: true,
-      showControls: true, // viewer sees prev/next + play/pause
-      showProgress: true,
-      theme: "aurora", // aurora | blue | purple | emerald
+      cardStyle: "movie",
+      autoplay: false,
+      showControls: true,
+      showProgress: false,
+      theme: "aurora",
     },
 
-    // screen blank by default
     slides: [],
   };
 

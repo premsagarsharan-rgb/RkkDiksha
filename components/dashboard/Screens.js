@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import LayerModal from "@/components/LayerModal";
 import { useCommitGate } from "@/components/CommitGate";
 import ScreenViewClient from "@/components/ScreenViewClient";
@@ -11,50 +11,37 @@ function safeId(x) {
   if (typeof x === "object" && x.$oid) return String(x.$oid);
   return String(x);
 }
-
 function uniq(arr) {
   return Array.from(new Set((arr || []).map(String)));
 }
+function toCode5(s) {
+  return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5);
+}
 
 export default function Screens({ session }) {
-  // My screens list (creator)
   const [list, setList] = useState([]);
   const [loadingList, setLoadingList] = useState(true);
 
   const [createTitle, setCreateTitle] = useState("");
 
-  // open creator screen
   const [openId, setOpenId] = useState(null);
   const [screen, setScreen] = useState(null);
   const [viewer, setViewer] = useState(null);
 
-  // creator: viewCode edit controls
   const [newViewCode, setNewViewCode] = useState("");
 
-  // container picker to push cards
   const [pickMode, setPickMode] = useState("DIKSHA");
   const [pickDate, setPickDate] = useState("");
   const [containerLoading, setContainerLoading] = useState(false);
   const [containerData, setContainerData] = useState({ container: null, assignments: [], reserved: [] });
 
-  // player state (owner preview)
-  const [idx, setIdx] = useState(0);
-  const [playing, setPlaying] = useState(true);
-
-  // viewer: view by code
+  // viewer by code
   const [viewCodeInput, setViewCodeInput] = useState("");
   const [viewOpen, setViewOpen] = useState(false);
   const [viewCodeActive, setViewCodeActive] = useState("");
 
   const { requestCommit, CommitModal } = useCommitGate({
-    defaultSuggestions: [
-      "Created screen",
-      "Added slide",
-      "Removed slide",
-      "Cleared screen",
-      "Updated screen settings",
-      "Updated view code",
-    ],
+    defaultSuggestions: ["Created screen", "Added slide", "Removed slide", "Cleared screen", "Updated screen settings", "Updated view code"],
   });
 
   async function loadList() {
@@ -65,16 +52,12 @@ export default function Screens({ session }) {
     setLoadingList(false);
   }
 
-  useEffect(() => {
-    loadList();
-  }, []);
+  useEffect(() => { loadList(); }, []);
 
   async function openScreen(screenId) {
     setOpenId(screenId);
     setScreen(null);
     setViewer(null);
-    setIdx(0);
-    setPlaying(true);
 
     const res = await fetch(`/api/screens/${screenId}`);
     const data = await res.json().catch(() => ({}));
@@ -89,7 +72,6 @@ export default function Screens({ session }) {
     setNewViewCode(data.screen?.viewCode || "");
   }
 
-  // poll screen (so creator sees updates instantly)
   useEffect(() => {
     if (!openId) return;
     let alive = true;
@@ -101,41 +83,13 @@ export default function Screens({ session }) {
       if (res.ok) {
         setScreen(data.screen);
         setViewer(data.viewer);
-        // keep input synced only if user not editing manually
       }
     }
 
     poll();
     const t = setInterval(poll, 2000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
+    return () => { alive = false; clearInterval(t); };
   }, [openId]);
-
-  const canEdit = Boolean(viewer?.canEdit);
-  const slides = screen?.slides || [];
-  const current = slides[idx] || null;
-
-  // auto play (creator preview)
-  useEffect(() => {
-    if (!slides.length) return;
-    const intervalMs = Number(screen?.settings?.intervalMs || 3500);
-    const autoplay = screen?.settings?.autoplay !== false;
-
-    if (!playing || !autoplay) return;
-
-    const t = setInterval(() => {
-      setIdx((i) => (i + 1) % slides.length);
-    }, intervalMs);
-
-    return () => clearInterval(t);
-  }, [slides.length, screen?.settings?.intervalMs, screen?.settings?.autoplay, playing]);
-
-  useEffect(() => {
-    if (!slides.length) setIdx(0);
-    else if (idx >= slides.length) setIdx(0);
-  }, [slides.length, idx]);
 
   async function createScreen() {
     const title = createTitle.trim();
@@ -170,7 +124,6 @@ export default function Screens({ session }) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return alert(data.error || "Update failed");
-    // poll will refresh
   }
 
   async function loadPickedContainer() {
@@ -208,9 +161,9 @@ export default function Screens({ session }) {
   }
 
   function getGroupCustomerIdsForAssignment(a) {
-    // If couple/family -> push whole group based on pairId (from same container list)
     const kind = (a?.kind || "SINGLE").toUpperCase();
     const pairId = safeId(a?.pairId);
+
     if ((kind === "COUPLE" || kind === "FAMILY") && pairId) {
       const group = (containerData.assignments || []).filter((x) => safeId(x?.pairId) === pairId);
       return {
@@ -225,10 +178,8 @@ export default function Screens({ session }) {
     const info = getGroupCustomerIdsForAssignment(a);
     if (!info.customerIds.length) return alert("Invalid customerId");
 
-    const title = info.kind === "SINGLE" ? "Push card to Screen" : `Push ${info.kind} group to Screen`;
-
     const commitMessage = await requestCommit({
-      title,
+      title: info.kind === "SINGLE" ? "Push card to Screen" : `Push ${info.kind} group to Screen`,
       subtitle: `${pickMode} ${pickDate}`,
       preset: "Added slide",
     }).catch(() => null);
@@ -244,34 +195,32 @@ export default function Screens({ session }) {
         containerId: safeId(containerData?.container?._id),
       },
     });
-
-    // jump to last
-    setIdx(slides.length);
   }
 
   function openViewByCode() {
-    const code = viewCodeInput.trim();
-    if (!code) return alert("Enter view code");
+    const code = toCode5(viewCodeInput);
+    if (code.length !== 5) return alert("Enter 5-char view code");
     setViewCodeActive(code);
     setViewOpen(true);
   }
 
   return (
     <div>
-      {/* Viewer (any user) */}
+      {/* Viewer */}
       <div className="rounded-3xl border border-white/10 bg-white/5 p-4 mb-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-white">View Screen (Locked)</div>
-            <div className="text-xs text-white/60">Enter viewCode to watch screen. No control.</div>
+            <div className="text-xs text-white/60">Enter 5-char code to watch.</div>
           </div>
 
           <div className="flex items-center gap-2">
             <input
               value={viewCodeInput}
-              onChange={(e) => setViewCodeInput(e.target.value)}
-              placeholder="SV-XXXXXXXXXX"
-              className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-white outline-none"
+              onChange={(e) => setViewCodeInput(toCode5(e.target.value))}
+              placeholder="ABCDE"
+              maxLength={5}
+              className="w-28 tracking-widest uppercase px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-white outline-none"
             />
             <button
               onClick={openViewByCode}
@@ -343,8 +292,6 @@ export default function Screens({ session }) {
           setPickDate("");
           setPickMode("DIKSHA");
           setContainerData({ container: null, assignments: [], reserved: [] });
-          setIdx(0);
-          setPlaying(true);
         }}
         maxWidth="max-w-6xl"
       >
@@ -352,22 +299,20 @@ export default function Screens({ session }) {
           <div className="text-white/60">Loading screen...</div>
         ) : (
           <div className="grid lg:grid-cols-2 gap-4">
-            {/* LEFT: Control */}
             <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
               <div className="text-sm font-semibold">Control Panel</div>
-              <div className="text-xs text-white/60 mt-1">You control. Others view by code.</div>
 
-              {/* viewCode controls */}
               <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
-                <div className="text-xs text-white/60">VIEW CODE</div>
-                <div className="text-lg font-bold">{screen.viewCode || "—"}</div>
+                <div className="text-xs text-white/60">VIEW CODE (5 chars)</div>
+                <div className="text-lg font-bold tracking-widest">{screen.viewCode || "—"}</div>
 
                 <div className="mt-3 flex gap-2">
                   <input
-                    value={newViewCode}
-                    onChange={(e) => setNewViewCode(e.target.value)}
-                    className="flex-1 px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-white outline-none"
-                    placeholder="Set custom code (A-Z/0-9/-/_)"
+                    value={toCode5(newViewCode)}
+                    onChange={(e) => setNewViewCode(toCode5(e.target.value))}
+                    maxLength={5}
+                    className="w-32 tracking-widest uppercase px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-white outline-none"
+                    placeholder="ABCDE"
                   />
                   <button
                     type="button"
@@ -378,15 +323,13 @@ export default function Screens({ session }) {
                         preset: "Updated view code",
                       }).catch(() => null);
                       if (!commitMessage) return;
-                      await patchScreen({ action: "setViewCode", viewCode: newViewCode });
+                      await patchScreen({ action: "setViewCode", viewCode: toCode5(newViewCode) });
                     }}
                     className="px-3 py-2 rounded-xl bg-white text-black font-semibold"
                   >
                     Set
                   </button>
-                </div>
 
-                <div className="mt-2 flex gap-2">
                   <button
                     type="button"
                     onClick={async () => {
@@ -400,39 +343,12 @@ export default function Screens({ session }) {
                     }}
                     className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
                   >
-                    Regenerate
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(screen.viewCode || "");
-                        alert("Copied viewCode");
-                      } catch {
-                        alert("Copy failed");
-                      }
-                    }}
-                    className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
-                  >
-                    Copy
+                    Regen
                   </button>
                 </div>
               </div>
 
-              {/* settings */}
               <div className="mt-4 grid sm:grid-cols-2 gap-2">
-                <select
-                  value={String(screen.settings?.intervalMs || 3500)}
-                  onChange={(e) => patchScreen({ action: "settings", settings: { ...screen.settings, intervalMs: Number(e.target.value) } })}
-                  className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-white text-sm"
-                >
-                  <option value="2000">Speed: 2s</option>
-                  <option value="3500">Speed: 3.5s</option>
-                  <option value="5000">Speed: 5s</option>
-                  <option value="8000">Speed: 8s</option>
-                </select>
-
                 <select
                   value={screen.settings?.theme || "aurora"}
                   onChange={(e) => patchScreen({ action: "settings", settings: { ...screen.settings, theme: e.target.value } })}
@@ -455,16 +371,6 @@ export default function Screens({ session }) {
 
                 <button
                   type="button"
-                  onClick={() => setPlaying((v) => !v)}
-                  className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-sm"
-                >
-                  {playing ? "Pause Preview" : "Play Preview"}
-                </button>
-              </div>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
                   onClick={async () => {
                     const commitMessage = await requestCommit({
                       title: "Clear Screen",
@@ -473,15 +379,13 @@ export default function Screens({ session }) {
                     }).catch(() => null);
                     if (!commitMessage) return;
                     await patchScreen({ action: "clearSlides" });
-                    setIdx(0);
                   }}
-                  className="px-3 py-2 rounded-xl bg-red-500/15 border border-red-400/20 hover:bg-red-500/20 text-xs"
+                  className="px-3 py-2 rounded-xl bg-red-500/15 border border-red-400/20 hover:bg-red-500/20 text-sm"
                 >
                   Clear Slides
                 </button>
               </div>
 
-              {/* Container select */}
               <div className="mt-5 text-sm font-semibold">Pick Container → Push Cards</div>
               <div className="mt-2 flex gap-2">
                 <button
@@ -523,7 +427,7 @@ export default function Screens({ session }) {
                     : "No container loaded"}
               </div>
 
-              <div className="mt-2 max-h-[340px] overflow-auto space-y-2 pr-1">
+              <div className="mt-2 max-h-[360px] overflow-auto space-y-2 pr-1">
                 {containerLoading ? (
                   <div className="text-white/60 text-sm">Loading...</div>
                 ) : (containerData.assignments || []).length === 0 ? (
@@ -551,94 +455,21 @@ export default function Screens({ session }) {
                   ))
                 )}
               </div>
-
-              {/* Playlist */}
-              <div className="mt-5 text-sm font-semibold">Playlist (Slides)</div>
-              <div className="mt-2 max-h-[240px] overflow-auto space-y-2 pr-1">
-                {slides.length === 0 ? (
-                  <div className="text-white/60 text-sm">Blank screen. Push cards to start.</div>
-                ) : (
-                  slides.map((sl, i) => (
-                    <div key={sl.slideId} className={`rounded-2xl border p-3 ${i === idx ? "border-blue-400/30 bg-blue-500/10" : "border-white/10 bg-black/20"}`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="font-semibold truncate">
-                            #{i + 1} — {sl.snapshots?.[0]?.name || "—"} {sl.kind !== "SINGLE" ? `(${sl.kind} ${sl.snapshots?.length || 0})` : ""}
-                          </div>
-                          <div className="text-xs text-white/60">Roll: {sl.snapshots?.[0]?.rollNo || "—"}</div>
-                        </div>
-
-                        <div className="flex gap-2 shrink-0">
-                          <button type="button" onClick={() => patchScreen({ action: "moveSlide", slideId: sl.slideId, dir: "up" })} className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 text-xs">↑</button>
-                          <button type="button" onClick={() => patchScreen({ action: "moveSlide", slideId: sl.slideId, dir: "down" })} className="px-2 py-1 rounded-lg bg-white/10 border border-white/10 text-xs">↓</button>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const commitMessage = await requestCommit({
-                                title: "Remove Slide",
-                                subtitle: sl.snapshots?.[0]?.name || "slide",
-                                preset: "Removed slide",
-                              }).catch(() => null);
-                              if (!commitMessage) return;
-                              await patchScreen({ action: "removeSlide", slideId: sl.slideId });
-                            }}
-                            className="px-2 py-1 rounded-lg bg-red-500/15 border border-red-400/20 text-xs"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
             </div>
 
-            {/* RIGHT: Preview Output (creator) */}
             <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <div>
-                  <div className="text-sm font-semibold">Screen Output (Preview)</div>
-                  <div className="text-xs text-white/60">Viewers will see same via code</div>
-                </div>
-
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIdx((i) => Math.max(0, i - 1))}
-                    className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
-                    disabled={!slides.length}
-                  >
-                    Prev
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setIdx((i) => (slides.length ? (i + 1) % slides.length : 0))}
-                    className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
-                    disabled={!slides.length}
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
-
-              {!current ? (
-                <div className="rounded-3xl border border-white/10 bg-white/5 p-10 text-center">
-                  <div className="text-2xl font-bold">Screen Blank</div>
-                  <div className="text-white/60 text-sm mt-2">
-                    Container se card push karo.
-                  </div>
-                </div>
-              ) : (
+              <div className="text-sm font-semibold mb-3">Screen Output (Preview)</div>
+              {screen?.viewCode ? (
                 <ScreenViewClient viewCode={screen.viewCode} embedded />
+              ) : (
+                <div className="text-white/60">No viewCode</div>
               )}
             </div>
           </div>
         )}
       </LayerModal>
 
-      {/* Viewer Modal (any user) */}
+      {/* Viewer Modal */}
       <LayerModal
         open={viewOpen}
         layerName="View Screen"
