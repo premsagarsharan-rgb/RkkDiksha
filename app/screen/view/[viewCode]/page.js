@@ -6,6 +6,6 @@ export default async function ScreenViewPage({ params }) {
   const { viewCode } = await params;
   const code = String(viewCode || "").trim().toUpperCase();
 
-  // SSE instant + poll fallback 1000ms
-  return <ScreenViewClient viewCode={code} embedded={false} liveMode="sse" pollMs={1000} />;
+  // ✅ Vercel: polling best
+  return <ScreenViewClient viewCode={code} embedded={false} liveMode="poll" pollMs={500} />;
 }
