@@ -24,14 +24,10 @@ function genViewCode5() {
   for (let i = 0; i < 5; i++) out += ALPH[bytes[i] % ALPH.length];
   return out;
 }
-
 function validateViewCode5(code) {
   const c = safeStr(code).toUpperCase();
   if (c.length !== 5) return null;
-  // only allowed alphabet
-  for (const ch of c) {
-    if (!ALPH.includes(ch)) return null;
-  }
+  for (const ch of c) if (!ALPH.includes(ch)) return null;
   return c;
 }
 
@@ -72,6 +68,7 @@ export async function GET(req, { params }) {
   const isOwner = String(s.createdByUserId || "") === String(session.userId || "");
   if (!isOwner) return NextResponse.json({ error: "Locked (creator only). Use viewCode to view." }, { status: 403 });
 
+  // manual-only enforced
   const settings = {
     cardStyle: s?.settings?.cardStyle || "movie",
     autoplay: false,
@@ -143,7 +140,6 @@ export async function PATCH(req, { params }) {
     if (!["movie", "compact"].includes(cardStyle)) return NextResponse.json({ error: "cardStyle invalid" }, { status: 400 });
     if (!["aurora", "blue", "purple", "emerald"].includes(theme)) return NextResponse.json({ error: "theme invalid" }, { status: 400 });
 
-    // ✅ manual only forced
     const nextSettings = {
       cardStyle,
       theme,
@@ -285,4 +281,43 @@ export async function PATCH(req, { params }) {
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+}
+
+export async function DELETE(req, { params }) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { screenId } = await params;
+  const body = await req.json().catch(() => ({}));
+  const commitMessage = safeStr(body?.commitMessage);
+
+  if (!commitMessage) return NextResponse.json({ error: "Commit required" }, { status: 400 });
+
+  const db = await getDb();
+  const _id = new ObjectId(screenId);
+
+  const screen = await db.collection("presentationScreens").findOne({ _id });
+  if (!screen) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const isOwner = String(screen.createdByUserId || "") === String(session.userId || "");
+  if (!isOwner) return NextResponse.json({ error: "Only screen creator can delete" }, { status: 403 });
+
+  const now = new Date();
+
+  // audit log (optional)
+  try {
+    await db.collection("screenAuditLogs").insertOne({
+      screenId: String(_id),
+      action: "DELETE_SCREEN",
+      title: screen.title || "",
+      viewCode: screen.viewCode || null,
+      commitMessage,
+      actor: { userId: session.userId, username: session.username, role: session.role },
+      createdAt: now,
+    });
+  } catch {}
+
+  await db.collection("presentationScreens").deleteOne({ _id });
+
+  return NextResponse.json({ ok: true });
 }

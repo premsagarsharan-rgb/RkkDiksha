@@ -1,4 +1,3 @@
-// components/dashboard/UserManage.js
 "use client";
 
 import { useEffect, useState } from "react";
@@ -9,7 +8,43 @@ const PERM_KEYS = [
   { key: "calander", label: "Calander" },
   { key: "pending", label: "Pending" },
   { key: "sitting", label: "Sitting" },
+
+  { key: "tracker", label: "Tracker" },
+
+  // ✅ split screens
+  { key: "screensCreate", label: "Screens: Create" },
+  { key: "screensView", label: "Screens: View" },
 ];
+
+const DEFAULT_USER_PERMS = {
+  recent: true,
+  add: true,
+  calander: true,
+  pending: true,
+  sitting: false,
+  tracker: false,
+
+  screensCreate: false,
+  screensView: false,
+
+  // legacy
+  screens: false,
+};
+
+function normalizePerms(p) {
+  const base = { ...DEFAULT_USER_PERMS, ...(p || {}) };
+
+  // Backward compatibility: old "screens" => enable both
+  if (typeof base.screens === "boolean") {
+    if (typeof base.screensCreate !== "boolean") base.screensCreate = base.screens;
+    if (typeof base.screensView !== "boolean") base.screensView = base.screens;
+  }
+
+  // keep legacy in sync for safety
+  base.screens = !!(base.screensCreate || base.screensView);
+
+  return base;
+}
 
 export default function UserManage() {
   const [items, setItems] = useState([]);
@@ -26,30 +61,29 @@ export default function UserManage() {
 
     const d = {};
     (data.items || []).forEach((u) => {
-      d[u._id] = u.permissions || {
-        recent: true,
-        add: true,
-        calander: true,
-        pending: true,
-        sitting: false,
-      };
+      d[u._id] = normalizePerms(u.permissions);
     });
     setPermDraft(d);
 
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   function toggle(userId, key) {
-    setPermDraft((prev) => ({
-      ...prev,
-      [userId]: { ...(prev[userId] || {}), [key]: !prev?.[userId]?.[key] },
-    }));
+    setPermDraft((prev) => {
+      const nextUser = normalizePerms(prev[userId] || {});
+      nextUser[key] = !nextUser[key];
+      nextUser.screens = !!(nextUser.screensCreate || nextUser.screensView);
+      return { ...prev, [userId]: nextUser };
+    });
   }
 
   async function savePermissions(userId) {
-    const permissions = permDraft[userId];
+    const permissions = normalizePerms(permDraft[userId]);
+
     const res = await fetch(`/api/users/${userId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -90,7 +124,9 @@ export default function UserManage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-white font-semibold text-lg">User Manage (Permissions)</h2>
+        <h2 className="text-white font-semibold text-lg">
+          User Manage (Permissions)
+        </h2>
         <button
           onClick={load}
           className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-white hover:bg-white/15"
@@ -142,7 +178,7 @@ export default function UserManage() {
                     Dashboard Components Allowed:
                   </div>
 
-                  <div className="grid sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
                     {PERM_KEYS.map((p) => (
                       <label
                         key={p.key}

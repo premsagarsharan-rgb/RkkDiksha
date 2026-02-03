@@ -11,18 +11,31 @@ function safeId(x) {
   if (typeof x === "object" && x.$oid) return String(x.$oid);
   return String(x);
 }
+
 function uniq(arr) {
   return Array.from(new Set((arr || []).map(String)));
 }
+
 function toCode5(s) {
-  return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5);
+  return String(s || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 5);
 }
 
-export default function Screens() {
+function ymdLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export default function ScreensCreate() {
   const [list, setList] = useState([]);
   const [loadingList, setLoadingList] = useState(true);
 
   const [createTitle, setCreateTitle] = useState("");
+
   const [openId, setOpenId] = useState(null);
   const [screen, setScreen] = useState(null);
 
@@ -36,11 +49,6 @@ export default function Screens() {
     assignments: [],
     reserved: [],
   });
-
-  // viewer
-  const [viewCodeInput, setViewCodeInput] = useState("");
-  const [viewOpen, setViewOpen] = useState(false);
-  const [viewCodeActive, setViewCodeActive] = useState("");
 
   const { requestCommit, CommitModal } = useCommitGate({
     defaultSuggestions: [
@@ -69,10 +77,9 @@ export default function Screens() {
     if (!openId) return;
     const res = await fetch(`/api/screens/${openId}`);
     const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      setScreen(data.screen);
-      setNewViewCode(data.screen?.viewCode || "");
-    }
+    if (!res.ok) return;
+    setScreen(data.screen);
+    setNewViewCode(data.screen?.viewCode || "");
   }
 
   async function openScreen(screenId) {
@@ -125,8 +132,7 @@ export default function Screens() {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return alert(data.error || "Update failed");
 
-    // ✅ no polling: reload once after action
-    await reloadOpenScreen();
+    await reloadOpenScreen(); // ✅ no polling; reload once
   }
 
   async function deleteScreen() {
@@ -157,8 +163,10 @@ export default function Screens() {
   }
 
   async function loadPickedContainer() {
-    if (!pickDate || !/^\d{4}-\d{2}-\d{2}$/.test(pickDate))
-      return alert("Date format YYYY-MM-DD");
+    if (!pickDate || !/^\d{4}-\d{2}-\d{2}$/.test(pickDate)) {
+      return alert("Pick a valid date");
+    }
+
     setContainerLoading(true);
     setContainerData({ container: null, assignments: [], reserved: [] });
 
@@ -172,11 +180,11 @@ export default function Screens() {
       if (!cRes.ok) throw new Error(cData.error || "Container failed");
 
       const containerObj = cData?.container?.value ?? cData?.container;
-      const containerId = containerObj?._id;
+      const containerId = safeId(containerObj?._id);
       if (!containerId) throw new Error("Invalid container");
 
       const dRes = await fetch(
-        `/api/calander/container/${containerId}?includeReserved=1`
+        `/api/calander/container/${encodeURIComponent(containerId)}?includeReserved=1`
       );
       const dData = await dRes.json().catch(() => ({}));
       if (!dRes.ok) throw new Error(dData.error || "Load failed");
@@ -194,7 +202,7 @@ export default function Screens() {
   }
 
   function getGroupCustomerIdsForAssignment(a) {
-    const kind = (a?.kind || "SINGLE").toUpperCase();
+    const kind = String(a?.kind || "SINGLE").toUpperCase();
     const pairId = safeId(a?.pairId);
 
     if ((kind === "COUPLE" || kind === "FAMILY") && pairId) {
@@ -206,6 +214,7 @@ export default function Screens() {
         customerIds: uniq(group.map((x) => safeId(x.customerId)).filter(Boolean)),
       };
     }
+
     return { kind: "SINGLE", customerIds: [safeId(a.customerId)].filter(Boolean) };
   }
 
@@ -235,55 +244,12 @@ export default function Screens() {
     });
   }
 
-  function openViewByCode() {
-    const code = toCode5(viewCodeInput);
-    if (code.length !== 5) return alert("Enter 5-char view code");
-    setViewCodeActive(code);
-    setViewOpen(true);
-  }
-
   return (
     <div>
-      {/* Viewer */}
-      <div className="rounded-3xl border border-white/10 bg-white/5 p-4 mb-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-white">
-              View Screen (Locked)
-            </div>
-            <div className="text-xs text-white/60">
-              Enter 5-char code to watch.
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <input
-              value={viewCodeInput}
-              onChange={(e) => setViewCodeInput(toCode5(e.target.value))}
-              placeholder="ABCDE"
-              maxLength={5}
-              className="w-28 tracking-widest uppercase px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-white outline-none"
-            />
-            <button
-              onClick={openViewByCode}
-              className="px-4 py-2 rounded-xl bg-white text-black font-semibold"
-              type="button"
-            >
-              View
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Creator */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
-          <h2 className="text-white font-semibold text-lg">
-            My Screens (Creator)
-          </h2>
-          <div className="text-xs text-white/60">
-            Only you can control your screens.
-          </div>
+          <h2 className="text-white font-semibold text-lg">Screens • Create</h2>
+          <div className="text-xs text-white/60">Create/manage your screens.</div>
         </div>
 
         <div className="flex flex-wrap gap-2 items-center">
@@ -336,7 +302,6 @@ export default function Screens() {
         </div>
       )}
 
-      {/* Creator Screen Modal */}
       <LayerModal
         open={!!openId}
         layerName="Screen (Creator)"
@@ -465,9 +430,8 @@ export default function Screens() {
                 </button>
               </div>
 
-              <div className="mt-5 text-sm font-semibold">
-                Pick Container → Push Cards
-              </div>
+              <div className="mt-5 text-sm font-semibold">Pick Container → Push Cards</div>
+
               <div className="mt-2 flex gap-2">
                 <button
                   type="button"
@@ -493,12 +457,23 @@ export default function Screens() {
                 </button>
               </div>
 
-              <input
-                value={pickDate}
-                onChange={(e) => setPickDate(e.target.value)}
-                placeholder="YYYY-MM-DD"
-                className="mt-2 w-full px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-white outline-none"
-              />
+              {/* ✅ Date picker (calendar opens) */}
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="date"
+                  value={pickDate}
+                  onChange={(e) => setPickDate(e.target.value)}
+                  className="flex-1 px-3 py-2 rounded-xl bg-white/10 border border-white/10 text-white outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setPickDate(ymdLocal(new Date()))}
+                  className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs"
+                  title="Set Today"
+                >
+                  Today
+                </button>
+              </div>
 
               <button
                 type="button"
@@ -523,12 +498,16 @@ export default function Screens() {
                   <div className="text-white/60 text-sm">No cards in container.</div>
                 ) : (
                   containerData.assignments.map((a) => (
-                    <div key={a._id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                    <div
+                      key={safeId(a._id)}
+                      className="rounded-2xl border border-white/10 bg-white/5 p-3"
+                    >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <div className="font-semibold truncate">{a.customer?.name || "—"}</div>
                           <div className="text-xs text-white/60">
-                            Roll: {a.customer?.rollNo || "—"} • {a.customer?.gender || "—"} • {a.kind || "SINGLE"}
+                            Roll: {a.customer?.rollNo || "—"} •{" "}
+                            {a.customer?.gender || "—"} • {a.kind || "SINGLE"}
                           </div>
                         </div>
 
@@ -549,32 +528,13 @@ export default function Screens() {
             <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
               <div className="text-sm font-semibold mb-3">Screen Output (Preview)</div>
               {screen?.viewCode ? (
-                <ScreenViewClient
-                  key={String(screen?.updatedAt || screen?.viewCode)}
-                  viewCode={screen.viewCode}
-                  embedded
-                />
+                <ScreenViewClient viewCode={screen.viewCode} embedded />
               ) : (
                 <div className="text-white/60">No viewCode</div>
               )}
             </div>
           </div>
         )}
-      </LayerModal>
-
-      {/* Viewer Modal */}
-      <LayerModal
-        open={viewOpen}
-        layerName="View Screen"
-        title="Viewer"
-        sub={`Code: ${viewCodeActive}`}
-        onClose={() => {
-          setViewOpen(false);
-          setViewCodeActive("");
-        }}
-        maxWidth="max-w-6xl"
-      >
-        <ScreenViewClient viewCode={viewCodeActive} embedded />
       </LayerModal>
 
       {CommitModal}

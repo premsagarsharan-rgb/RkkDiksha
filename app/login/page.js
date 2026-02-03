@@ -21,12 +21,23 @@ export default function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
+
       const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        setErr(data.error || "Login failed");
+        if (res.status === 409) {
+          setErr(
+            "Access Denied: You are already logged in on another device. Please logout from that device first."
+          );
+        } else if (data?.error || data?.message) {
+          setErr(data.error || data.message);
+        } else {
+          setErr("Login failed");
+        }
         setLoading(false);
         return;
       }
+
       router.push("/dashboard");
       router.refresh();
     } catch {

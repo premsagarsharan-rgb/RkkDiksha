@@ -1,4 +1,3 @@
-// components/dashboard/UserCreate.js
 "use client";
 
 import { useMemo, useState } from "react";
@@ -9,6 +8,12 @@ const PERM_KEYS = [
   { key: "calander", label: "Calander" },
   { key: "pending", label: "Pending" },
   { key: "sitting", label: "Sitting" },
+
+  { key: "tracker", label: "Tracker" },
+
+  // ✅ split screens
+  { key: "screensCreate", label: "Screens: Create" },
+  { key: "screensView", label: "Screens: View" },
 ];
 
 export default function UserCreate() {
@@ -22,12 +27,24 @@ export default function UserCreate() {
     calander: true,
     pending: true,
     sitting: false,
+
+    tracker: false,
+
+    screensCreate: false,
+    screensView: false,
+
+    // legacy (optional): keep false, we won't show checkbox for it
+    screens: false,
   });
 
   const [busy, setBusy] = useState(false);
 
   const canSubmit = useMemo(() => {
-    return Boolean(username.trim() && password.trim().length >= 4 && (role === "ADMIN" || role === "USER"));
+    return Boolean(
+      username.trim() &&
+        password.trim().length >= 4 &&
+        (role === "ADMIN" || role === "USER")
+    );
   }, [username, password, role]);
 
   function togglePerm(key) {
@@ -39,11 +56,17 @@ export default function UserCreate() {
 
     setBusy(true);
     try {
+      const nextPerms = {
+        ...permissions,
+        // keep legacy in sync (backward compatibility)
+        screens: !!(permissions.screensCreate || permissions.screensView),
+      };
+
       const payload = {
         username: username.trim(),
         password: password,
         role,
-        permissions: role === "USER" ? permissions : null,
+        permissions: role === "USER" ? nextPerms : null,
       };
 
       const res = await fetch("/api/users", {
@@ -68,6 +91,10 @@ export default function UserCreate() {
         calander: true,
         pending: true,
         sitting: false,
+        tracker: false,
+        screensCreate: false,
+        screensView: false,
+        screens: false,
       });
     } finally {
       setBusy(false);
@@ -122,9 +149,11 @@ export default function UserCreate() {
 
       {role === "USER" ? (
         <div className="mt-5">
-          <div className="text-xs text-white/60 mb-2">Allowed Dashboard Components (Whitelist)</div>
+          <div className="text-xs text-white/60 mb-2">
+            Allowed Dashboard Components (Whitelist)
+          </div>
 
-          <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
             {PERM_KEYS.map((p) => (
               <label
                 key={p.key}
@@ -150,10 +179,6 @@ export default function UserCreate() {
       >
         {busy ? "Creating..." : "Create User"}
       </button>
-
-      <div className="mt-3 text-xs text-white/50">
-        Note: New user ko login ke liye <b>active = true</b> hona chahiye (default true).
-      </div>
     </div>
   );
 }

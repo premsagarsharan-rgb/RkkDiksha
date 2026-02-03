@@ -43,7 +43,9 @@ function escapeHtml(s) {
 }
 
 function countGenders(list) {
-  let male = 0, female = 0, other = 0;
+  let male = 0,
+    female = 0,
+    other = 0;
   for (const a of list || []) {
     const g = a?.customer?.gender;
     if (g === "MALE") male++;
@@ -61,6 +63,15 @@ export default function Calander({ role }) {
   const year = anchor.getFullYear();
   const month = anchor.getMonth();
   const cells = useMemo(() => monthCells(year, month), [year, month]);
+  const daysInThisMonth = useMemo(
+    () => new Date(year, month + 1, 0).getDate(),
+    [year, month]
+  );
+  const monthDays = useMemo(() => {
+    return Array.from({ length: daysInThisMonth }, (_, i) => {
+      return new Date(year, month, i + 1);
+    });
+  }, [daysInThisMonth, year, month]);
 
   const [selectedDate, setSelectedDate] = useState(null);
   const [summary, setSummary] = useState({});
@@ -73,6 +84,7 @@ export default function Calander({ role }) {
   const [reserved, setReserved] = useState([]);
   const [showList, setShowList] = useState(true);
   const [housefull, setHousefull] = useState(false);
+  const [containerLoading, setContainerLoading] = useState(false);
 
   // Add customer layer
   const [addOpen, setAddOpen] = useState(false);
@@ -117,7 +129,9 @@ export default function Calander({ role }) {
   async function loadSummary() {
     const from = ymdLocal(new Date(year, month, 1));
     const to = ymdLocal(new Date(year, month + 1, 0));
-    const res = await fetch(`/api/calander/summary?from=${from}&to=${to}&mode=${mode}`);
+    const res = await fetch(
+      `/api/calander/summary?from=${from}&to=${to}&mode=${mode}`
+    );
     const data = await res.json().catch(() => ({}));
     setSummary(data.map || {});
   }
@@ -127,33 +141,47 @@ export default function Calander({ role }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year, month, mode]);
 
-  async function openContainerForDate(dateStr) {
+  function isDesktopNow() {
+    if (typeof window === "undefined") return true;
+    return window.matchMedia("(min-width: 768px)").matches; // md
+  }
+
+  async function openContainerForDate(dateStr, opts = {}) {
+    const shouldOpenLayer =
+      typeof opts.openLayer === "boolean" ? opts.openLayer : isDesktopNow();
+
     setHousefull(false);
     setSelectedDate(dateStr);
+    setContainerLoading(true);
 
-    const cRes = await fetch("/api/calander/container/by-date", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date: dateStr, mode }),
-    });
+    try {
+      const cRes = await fetch("/api/calander/container/by-date", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: dateStr, mode }),
+      });
 
-    const raw = await cRes.json().catch(() => ({}));
-    if (!cRes.ok) return alert(raw.error || "Container failed");
+      const raw = await cRes.json().catch(() => ({}));
+      if (!cRes.ok) return alert(raw.error || "Container failed");
 
-    const containerObj = raw?.container?.value ?? raw?.container;
-    if (!containerObj?._id) return alert("Invalid container response");
+      const containerObj = raw?.container?.value ?? raw?.container;
+      if (!containerObj?._id) return alert("Invalid container response");
 
-    const id = safeId(containerObj._id);
+      const id = safeId(containerObj._id);
 
-    const dRes = await fetch(`/api/calander/container/${id}?includeReserved=1`);
-    const dData = await dRes.json().catch(() => ({}));
-    if (!dRes.ok) return alert(dData.error || "Load failed");
+      const dRes = await fetch(`/api/calander/container/${id}?includeReserved=1`);
+      const dData = await dRes.json().catch(() => ({}));
+      if (!dRes.ok) return alert(dData.error || "Load failed");
 
-    setContainer(dData.container);
-    setAssignments(dData.assignments || []);
-    setReserved(dData.reserved || []);
-    setShowList(true);
-    setContainerOpen(true);
+      setContainer(dData.container);
+      setAssignments(dData.assignments || []);
+      setReserved(dData.reserved || []);
+      setShowList(true);
+
+      setContainerOpen(shouldOpenLayer);
+    } finally {
+      setContainerLoading(false);
+    }
   }
 
   async function refreshContainer() {
@@ -178,7 +206,8 @@ export default function Calander({ role }) {
 
     const sitRes = await fetch("/api/customers/sitting");
     const sitData = await sitRes.json().catch(() => ({}));
-    if (!sitRes.ok) return alert(sitData.error || "Failed to load sitting customers");
+    if (!sitRes.ok)
+      return alert(sitData.error || "Failed to load sitting customers");
 
     setSittingActive((sitData.items || []).filter((c) => c.status === "ACTIVE"));
   }
@@ -199,8 +228,14 @@ export default function Calander({ role }) {
 
     const commitMessage = await requestCommit({
       title: container.mode === "MEETING" ? "Meeting Assign + Occupy" : "Assign Single",
-      subtitle: container.mode === "MEETING" ? `Occupy Diksha: ${occupyDate}` : "Customer will be added to container.",
-      preset: container.mode === "MEETING" ? "Meeting reserved (occupy)" : "Assigned customer to container",
+      subtitle:
+        container.mode === "MEETING"
+          ? `Occupy Diksha: ${occupyDate}`
+          : "Customer will be added to container.",
+      preset:
+        container.mode === "MEETING"
+          ? "Meeting reserved (occupy)"
+          : "Assigned customer to container",
     }).catch(() => null);
 
     if (!commitMessage) return;
@@ -254,25 +289,41 @@ export default function Calander({ role }) {
     const isCouple = ids.length === 2;
 
     const commitMessage = await requestCommit({
-      title: container.mode === "MEETING" ? "Meeting Group + Occupy" : (isCouple ? "Assign Couple" : "Assign Family"),
-      subtitle: container.mode === "MEETING" ? `Occupy Diksha: ${occupyDate}` : "Group will be added to container.",
-      preset: container.mode === "MEETING" ? "Meeting reserved (occupy)" : (isCouple ? "Couple assigned" : "Family assigned"),
+      title:
+        container.mode === "MEETING"
+          ? "Meeting Group + Occupy"
+          : isCouple
+          ? "Assign Couple"
+          : "Assign Family",
+      subtitle:
+        container.mode === "MEETING"
+          ? `Occupy Diksha: ${occupyDate}`
+          : "Group will be added to container.",
+      preset:
+        container.mode === "MEETING"
+          ? "Meeting reserved (occupy)"
+          : isCouple
+          ? "Couple assigned"
+          : "Family assigned",
     }).catch(() => null);
 
     if (!commitMessage) return;
 
     setPushing(true);
     try {
-      const res = await fetch(`/api/calander/container/${container._id}/assign-couple`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customerIds: ids,
-          note: "",
-          commitMessage,
-          occupyDate: container.mode === "MEETING" ? occupyDate : undefined,
-        }),
-      });
+      const res = await fetch(
+        `/api/calander/container/${container._id}/assign-couple`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            customerIds: ids,
+            note: "",
+            commitMessage,
+            occupyDate: container.mode === "MEETING" ? occupyDate : undefined,
+          }),
+        }
+      );
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -301,7 +352,11 @@ export default function Calander({ role }) {
 
     const res = await fetch(
       `/api/calander/container/${container._id}/assignments/${assignment._id}/confirm`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ commitMessage }) }
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commitMessage }),
+      }
     );
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return alert(data.error || "Confirm failed");
@@ -321,7 +376,11 @@ export default function Calander({ role }) {
 
     const res = await fetch(
       `/api/calander/container/${container._id}/assignments/${assignment._id}/reject`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ commitMessage }) }
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commitMessage }),
+      }
     );
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return alert(data.error || "Reject failed");
@@ -345,11 +404,14 @@ export default function Calander({ role }) {
 
     if (!commitMessage) return;
 
-    const res = await fetch(`/api/calander/container/${container._id}/assignments/${assignmentId}/out`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ commitMessage }),
-    });
+    const res = await fetch(
+      `/api/calander/container/${container._id}/assignments/${assignmentId}/out`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commitMessage }),
+      }
+    );
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return alert(data.error || "Out failed");
@@ -387,10 +449,11 @@ export default function Calander({ role }) {
     setProfileOpen(true);
   }
 
-  // Print All unchanged (same as your previous version)
+  // Print All unchanged
   function openPrintAllForContainer() {
     if (!container?._id) return alert("Container not ready");
-    if (!assignments || assignments.length === 0) return alert("No customers in container");
+    if (!assignments || assignments.length === 0)
+      return alert("No customers in container");
 
     const title = `${container.date} / ${container.mode}`;
     const total = assignments.length;
@@ -410,15 +473,33 @@ export default function Calander({ role }) {
             </div>
             <h2 class="name">${escapeHtml(c.name || "—")}</h2>
             <div class="grid">
-              <div class="field"><div class="k">RollNo</div><div class="v">${escapeHtml(c.rollNo || "—")}</div></div>
-              <div class="field"><div class="k">Age</div><div class="v">${escapeHtml(c.age || "—")}</div></div>
-              <div class="field"><div class="k">Gender</div><div class="v">${escapeHtml(c.gender || "—")}</div></div>
-              <div class="field"><div class="k">Pincode</div><div class="v">${escapeHtml(c.pincode || "—")}</div></div>
-              <div class="field full"><div class="k">Address</div><div class="v">${escapeHtml(c.address || "—")}</div></div>
-              <div class="field"><div class="k">Follow Years</div><div class="v">${escapeHtml(c.followYears || "—")}</div></div>
-              <div class="field"><div class="k">Club Visits</div><div class="v">${escapeHtml(c.clubVisitsBefore || "—")}</div></div>
-              <div class="field"><div class="k">Month/Year</div><div class="v">${escapeHtml(c.monthYear || "—")}</div></div>
-              <div class="field"><div class="k">City/State</div><div class="v">${escapeHtml((c.city || "—") + " / " + (c.state || "—"))}</div></div>
+              <div class="field"><div class="k">RollNo</div><div class="v">${escapeHtml(
+                c.rollNo || "—"
+              )}</div></div>
+              <div class="field"><div class="k">Age</div><div class="v">${escapeHtml(
+                c.age || "—"
+              )}</div></div>
+              <div class="field"><div class="k">Gender</div><div class="v">${escapeHtml(
+                c.gender || "—"
+              )}</div></div>
+              <div class="field"><div class="k">Pincode</div><div class="v">${escapeHtml(
+                c.pincode || "—"
+              )}</div></div>
+              <div class="field full"><div class="k">Address</div><div class="v">${escapeHtml(
+                c.address || "—"
+              )}</div></div>
+              <div class="field"><div class="k">Follow Years</div><div class="v">${escapeHtml(
+                c.followYears || "—"
+              )}</div></div>
+              <div class="field"><div class="k">Club Visits</div><div class="v">${escapeHtml(
+                c.clubVisitsBefore || "—"
+              )}</div></div>
+              <div class="field"><div class="k">Month/Year</div><div class="v">${escapeHtml(
+                c.monthYear || "—"
+              )}</div></div>
+              <div class="field"><div class="k">City/State</div><div class="v">${escapeHtml(
+                (c.city || "—") + " / " + (c.state || "—")
+              )}</div></div>
               <div class="field full"><div class="k">Description / Notes</div><div class="descBox"></div></div>
             </div>
             <div class="sig"><div class="line">Customer Signature</div><div class="line">Admin Signature</div></div>
@@ -485,32 +566,60 @@ export default function Calander({ role }) {
   }, [selectedIds, sittingActive]);
 
   const targetSingle = useMemo(() => {
-    return singleTargetId ? sittingActive.find((c) => safeId(c._id) === singleTargetId) : null;
+    return singleTargetId
+      ? sittingActive.find((c) => safeId(c._id) === singleTargetId)
+      : null;
   }, [singleTargetId, sittingActive]);
 
   const familySelectStyle = useMemo(() => {
-    if (pickMode !== "FAMILY") return { border: "border-white/10", bg: "bg-black/30" };
-    if (selectedIds.length === 2) return { border: "border-fuchsia-400/30", bg: "bg-fuchsia-500/10" };
-    if (selectedIds.length > 2) return { border: "border-blue-400/30", bg: "bg-blue-500/10" };
+    if (pickMode !== "FAMILY")
+      return { border: "border-white/10", bg: "bg-black/30" };
+    if (selectedIds.length === 2)
+      return { border: "border-fuchsia-400/30", bg: "bg-fuchsia-500/10" };
+    if (selectedIds.length > 2)
+      return { border: "border-blue-400/30", bg: "bg-blue-500/10" };
     return { border: "border-white/10", bg: "bg-black/30" };
   }, [pickMode, selectedIds.length]);
+
+  // Mobile helper: when calendar opens on mobile, auto-load a date
+  useEffect(() => {
+    if (!calOpen) return;
+    if (typeof window === "undefined") return;
+
+    const mobile = !window.matchMedia("(min-width: 768px)").matches;
+    if (!mobile) return;
+
+    const sameMonthAsToday = todayStr.slice(0, 7) === ymdLocal(anchor).slice(0, 7);
+    const fallback = ymdLocal(new Date(year, month, 1));
+    const autoDate = selectedDate || (sameMonthAsToday ? todayStr : fallback);
+
+    // Keep embedded view (no Container modal) on mobile
+    openContainerForDate(autoDate, { openLayer: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calOpen, year, month, mode]);
+
+  const mobileContainerReady =
+    !!container && (selectedDate ? container?.date === selectedDate : true);
 
   return (
     <div>
       <button
-        onClick={() => { setAnchor(new Date()); setCalOpen(true); }}
+        onClick={() => {
+          setAnchor(new Date());
+          setCalOpen(true);
+        }}
         className="px-4 py-2 rounded-2xl bg-white/10 border border-white/10 text-white hover:bg-white/15 transition"
         type="button"
       >
         Open Calander
       </button>
 
-      {/* Layer 1: Calendar grid */}
+      {/* Layer 1: Calendar */}
       <LayerModal
         open={calOpen}
         layerName="Calander"
         title="Calander"
-        sub="Sunday-Red Monthly Grid"
+        sub="Desktop: Monthly Grid • Mobile: Day Strip"
         onClose={() => {
           setCalOpen(false);
           setContainerOpen(false);
@@ -526,88 +635,397 @@ export default function Calander({ role }) {
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={() => setAnchor(new Date(year, month - 1, 1))} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15" type="button">◀</button>
+            <button
+              onClick={() => setAnchor(new Date(year, month - 1, 1))}
+              className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15"
+              type="button"
+            >
+              ◀
+            </button>
 
             <div className="rounded-2xl bg-black/30 border border-white/10 p-1 flex">
               <button
                 onClick={() => setMode("DIKSHA")}
-                className={`px-3 sm:px-4 py-2 rounded-xl text-sm ${mode==="DIKSHA" ? "bg-white text-black font-semibold" : "text-white/70 hover:bg-white/10"}`}
+                className={`px-3 sm:px-4 py-2 rounded-xl text-sm ${
+                  mode === "DIKSHA"
+                    ? "bg-white text-black font-semibold"
+                    : "text-white/70 hover:bg-white/10"
+                }`}
                 type="button"
               >
                 Diksha
               </button>
               <button
                 onClick={() => setMode("MEETING")}
-                className={`px-3 sm:px-4 py-2 rounded-xl text-sm ${mode==="MEETING" ? "bg-white text-black font-semibold" : "text-white/70 hover:bg-white/10"}`}
+                className={`px-3 sm:px-4 py-2 rounded-xl text-sm ${
+                  mode === "MEETING"
+                    ? "bg-white text-black font-semibold"
+                    : "text-white/70 hover:bg-white/10"
+                }`}
                 type="button"
               >
                 Meeting
               </button>
             </div>
 
-            <button onClick={() => setAnchor(new Date(year, month + 1, 1))} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15" type="button">▶</button>
+            <button
+              onClick={() => setAnchor(new Date(year, month + 1, 1))}
+              className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15"
+              type="button"
+            >
+              ▶
+            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-7 gap-1 sm:gap-2 text-[10px] sm:text-xs mb-2">
-          {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d,i)=>(
-            <div key={d} className={`${i===0 ? "text-red-300" : "text-white/70"} text-center`}>{d}</div>
-          ))}
-        </div>
+        {/* ✅ Mobile Day Strip View */}
+        <div className="block md:hidden">
+          <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+            <div className="text-xs text-white/60 mb-2">Select Date</div>
 
-        <div className="grid grid-cols-7 gap-1 sm:gap-2">
-          {cells.map((d, idx) => {
-            if (!d) return <div key={idx} />;
-            const dateStr = ymdLocal(d);
-            const isSun = idx % 7 === 0;
-            const isSelected = selectedDate === dateStr;
-            const isToday = dateStr === todayStr;
-            const s = summary[dateStr];
+            <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+              {monthDays.map((d) => {
+                const dateStr = ymdLocal(d);
+                const isSelected = selectedDate === dateStr;
+                const isToday = dateStr === todayStr;
+                const weekday = d.toLocaleDateString("default", { weekday: "short" });
+                const isSun = d.getDay() === 0;
+                const s = summary?.[dateStr];
 
-            return (
-              <button
-                key={dateStr}
-                onClick={() => openContainerForDate(dateStr)}
-                className={[
-                  "min-h-[62px] sm:min-h-[84px] rounded-2xl border p-1.5 sm:p-2 text-left transition",
-                  "bg-black/30 border-white/10 hover:bg-black/40",
-                  isSelected ? "ring-2 ring-blue-500/60" : "",
-                  isSun ? "ring-1 ring-red-500/20" : "",
-                  isToday ? "ring-2 ring-emerald-400/60 border-emerald-400/30 shadow-[0_0_30px_rgba(16,185,129,0.12)]" : "",
-                ].join(" ")}
-                type="button"
-              >
-                <div className="flex items-center justify-between">
-                  <div className={`text-xs sm:text-sm font-semibold ${isSun ? "text-red-200" : "text-white"}`}>{d.getDate()}</div>
-                  {isToday ? (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/20 border border-emerald-400/20 text-emerald-200">Today</span>
-                  ) : null}
+                return (
+                  <button
+                    key={dateStr}
+                    type="button"
+                    onClick={() => openContainerForDate(dateStr, { openLayer: false })}
+                    className={[
+                      "shrink-0 min-w-[72px] rounded-2xl border px-3 py-2 text-left",
+                      "bg-black/30 border-white/10",
+                      isSelected ? "ring-2 ring-blue-500/60" : "",
+                      isToday
+                        ? "border-emerald-400/30 shadow-[0_0_30px_rgba(16,185,129,0.12)]"
+                        : "",
+                    ].join(" ")}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div
+                        className={[
+                          "text-[11px] font-semibold",
+                          isSun ? "text-red-200" : "text-white/80",
+                        ].join(" ")}
+                      >
+                        {weekday}
+                      </div>
+                      {isToday ? (
+                        <span className="text-[10px] text-emerald-200">●</span>
+                      ) : null}
+                    </div>
+                    <div className="text-base font-bold leading-5">
+                      {d.getDate()}
+                    </div>
+                    <div className="mt-1 text-[10px] text-white/60">
+                      {s ? `M${s.male} F${s.female}` : "—"}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Container panel inside calendar (mobile) */}
+          <div className="mt-3">
+            {housefull ? (
+              <div className="mb-3 rounded-2xl border border-red-400/20 bg-red-500/10 p-3">
+                <div className="text-sm font-semibold text-red-200">Housefull</div>
+                <div className="text-xs text-red-200/80 mt-1">
+                  Limit reached. Admin can increase limit.
+                </div>
+              </div>
+            ) : null}
+
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs text-white/60">CONTAINER</div>
+                  <div className="mt-1 font-bold truncate">
+                    {mobileContainerReady
+                      ? `${container.date} / ${container.mode}`
+                      : selectedDate
+                      ? `${selectedDate} / ${mode}`
+                      : `${mode}`}
+                  </div>
+                  <div className="text-xs text-white/60 mt-1">
+                    {mobileContainerReady ? (
+                      container?.mode === "DIKSHA" ? (
+                        <>
+                          IN {counts.total} (M{counts.male}/F{counts.female}) • Reserved{" "}
+                          {reservedCounts.total} • Limit {container.limit || 20}
+                        </>
+                      ) : (
+                        <>
+                          Total {counts.total} | Male {counts.male} | Female{" "}
+                          {counts.female}
+                        </>
+                      )
+                    ) : containerLoading ? (
+                      "Loading..."
+                    ) : (
+                      "Select a date to load."
+                    )}
+                  </div>
                 </div>
 
-                <div className="text-[10px] text-white/50">{mode}</div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {role === "ADMIN" ? (
+                    <button
+                      onClick={increaseLimit}
+                      className="w-11 h-11 rounded-2xl bg-white text-black font-bold disabled:opacity-60"
+                      title="Increase limit"
+                      type="button"
+                      disabled={!mobileContainerReady}
+                    >
+                      +
+                    </button>
+                  ) : null}
 
-                {s ? (
-                  <div className="mt-1.5 sm:mt-2 text-[10px] sm:text-[11px] text-white/80 flex gap-1.5 sm:gap-2 flex-wrap">
-                    <span className="px-2 py-0.5 rounded-full bg-white/10 border border-white/10">M {s.male}</span>
-                    <span className="px-2 py-0.5 rounded-full bg-white/10 border border-white/10">F {s.female}</span>
+                  <button
+                    type="button"
+                    onClick={openPrintAllForContainer}
+                    className="w-11 h-11 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 disabled:opacity-60"
+                    title="Print all"
+                    disabled={!mobileContainerReady}
+                  >
+                    🖨
+                  </button>
+
+                  <button
+                    onClick={openAddCustomerLayer}
+                    className="w-11 h-11 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 disabled:opacity-60"
+                    title="Add customer"
+                    type="button"
+                    disabled={!mobileContainerReady}
+                  >
+                    ＋
+                  </button>
+                </div>
+              </div>
+
+              {mobileContainerReady && container?.mode === "DIKSHA" && reserved?.length > 0 ? (
+                <div className="mt-3 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-3">
+                  <div className="text-sm font-semibold text-emerald-100">
+                    Reserved / Occupied (Meeting holds)
                   </div>
-                ) : (
-                  <div className="mt-1.5 sm:mt-2 text-[10px] sm:text-[11px] text-white/35">—</div>
-                )}
-              </button>
-            );
-          })}
+                  <div className="text-xs text-emerald-100/80 mt-1">
+                    Count: {reserved.length}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="mt-3 flex items-center justify-between">
+                <div className="text-xs text-white/60">
+                  Customers
+                  {containerLoading ? " (loading...)" : ""}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowList((v) => !v)}
+                  className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-xs"
+                  disabled={!mobileContainerReady}
+                >
+                  {showList ? "Hide List" : "Show List"}
+                </button>
+              </div>
+
+              {!mobileContainerReady ? (
+                <div className="mt-3 text-white/60 text-sm">
+                  Pick a date from the strip to view the container.
+                </div>
+              ) : !showList ? (
+                <div className="mt-3 text-white/60 text-sm">List hidden.</div>
+              ) : assignments.length === 0 ? (
+                <div className="mt-3 text-white/60 text-sm">
+                  No customers in container.
+                </div>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {assignments.map((a, idx) => {
+                    const seq = idx + 1;
+                    const kind = a.kind || "SINGLE";
+                    const cust = a.customer;
+
+                    const isCouple = kind === "COUPLE";
+                    const isFamily = kind === "FAMILY";
+                    const isMeeting = container?.mode === "MEETING";
+
+                    const cardCls = [
+                      "rounded-2xl border p-4 flex items-start justify-between gap-3 cursor-pointer transition",
+                      "hover:bg-black/35",
+                      isFamily ? "border-blue-400/20 bg-blue-500/10" : "",
+                      isCouple ? "border-fuchsia-400/20 bg-fuchsia-500/10" : "",
+                      !isFamily && !isCouple ? "border-white/10 bg-black/30" : "",
+                    ].join(" ");
+
+                    return (
+                      <div
+                        key={safeId(a._id)}
+                        className={cardCls}
+                        onClick={() => openProfile(cust)}
+                        title="Click to open profile"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs text-white/60">
+                            #{seq} • {kind}
+                            {a.roleInPair ? ` (${a.roleInPair})` : ""}
+                          </div>
+                          <div className="font-semibold truncate mt-0.5">
+                            {cust?.name}
+                          </div>
+                          <div className="text-xs text-white/60 truncate">
+                            {cust?.address || "-"}
+                          </div>
+                          <div className="text-[11px] text-white/50 mt-1">
+                            {cust?.gender}
+                          </div>
+
+                          {isMeeting && a?.occupiedDate ? (
+                            <div className="mt-2 inline-flex px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/15 border border-emerald-400/20 text-emerald-200">
+                              Occupied: {a.occupiedDate}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {isMeeting ? (
+                          <div className="flex flex-col gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                confirmMeetingCard(a);
+                              }}
+                              className="px-4 py-2 rounded-2xl bg-white text-black text-xs font-semibold"
+                            >
+                              Confirm
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRejectTarget(a);
+                                setRejectOpen(true);
+                              }}
+                              className="px-4 py-2 rounded-2xl bg-white/10 hover:bg-white/15 text-xs border border-white/10"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              outAssignment(a._id);
+                            }}
+                            className="px-4 py-2 rounded-2xl bg-white/10 hover:bg-white/15 text-xs shrink-0 border border-white/10"
+                          >
+                            Out
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ✅ Desktop Monthly Grid (unchanged) */}
+        <div className="hidden md:block">
+          <div className="grid grid-cols-7 gap-1 sm:gap-2 text-[10px] sm:text-xs mb-2">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => (
+              <div
+                key={d}
+                className={`${
+                  i === 0 ? "text-red-300" : "text-white/70"
+                } text-center`}
+              >
+                {d}
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-7 gap-1 sm:gap-2">
+            {cells.map((d, idx) => {
+              if (!d) return <div key={idx} />;
+              const dateStr = ymdLocal(d);
+              const isSun = idx % 7 === 0;
+              const isSelected = selectedDate === dateStr;
+              const isToday = dateStr === todayStr;
+              const s = summary[dateStr];
+
+              return (
+                <button
+                  key={dateStr}
+                  onClick={() => openContainerForDate(dateStr, { openLayer: true })}
+                  className={[
+                    "min-h-[62px] sm:min-h-[84px] rounded-2xl border p-1.5 sm:p-2 text-left transition",
+                    "bg-black/30 border-white/10 hover:bg-black/40",
+                    isSelected ? "ring-2 ring-blue-500/60" : "",
+                    isSun ? "ring-1 ring-red-500/20" : "",
+                    isToday
+                      ? "ring-2 ring-emerald-400/60 border-emerald-400/30 shadow-[0_0_30px_rgba(16,185,129,0.12)]"
+                      : "",
+                  ].join(" ")}
+                  type="button"
+                >
+                  <div className="flex items-center justify-between">
+                    <div
+                      className={`text-xs sm:text-sm font-semibold ${
+                        isSun ? "text-red-200" : "text-white"
+                      }`}
+                    >
+                      {d.getDate()}
+                    </div>
+                    {isToday ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/20 border border-emerald-400/20 text-emerald-200">
+                        Today
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="text-[10px] text-white/50">{mode}</div>
+
+                  {s ? (
+                    <div className="mt-1.5 sm:mt-2 text-[10px] sm:text-[11px] text-white/80 flex gap-1.5 sm:gap-2 flex-wrap">
+                      <span className="px-2 py-0.5 rounded-full bg-white/10 border border-white/10">
+                        M {s.male}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-white/10 border border-white/10">
+                        F {s.female}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 sm:mt-2 text-[10px] sm:text-[11px] text-white/35">
+                      —
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </LayerModal>
 
-      {/* Layer 2: Container */}
+      {/* Layer 2: Container (Desktop flow remains) */}
       <LayerModal
         open={containerOpen && !!container}
         layerName="Container"
         title={container ? `${container.date} / ${container.mode}` : "Container"}
         sub={
           container?.mode === "DIKSHA"
-            ? `IN ${counts.total} (M${counts.male}/F${counts.female}) • Reserved ${reservedCounts.total} • Limit ${container.limit || 20}`
+            ? `IN ${counts.total} (M${counts.male}/F${counts.female}) • Reserved ${reservedCounts.total} • Limit ${
+                container.limit || 20
+              }`
             : `Total ${counts.total} | Male ${counts.male} | Female ${counts.female}`
         }
         onClose={() => {
@@ -626,24 +1044,58 @@ export default function Calander({ role }) {
         {housefull ? (
           <div className="mb-3 rounded-2xl border border-red-400/20 bg-red-500/10 p-3">
             <div className="text-sm font-semibold text-red-200">Housefull</div>
-            <div className="text-xs text-red-200/80 mt-1">Limit reached. Admin can increase limit.</div>
+            <div className="text-xs text-red-200/80 mt-1">
+              Limit reached. Admin can increase limit.
+            </div>
           </div>
         ) : null}
 
         <div className="flex flex-wrap items-center justify-end gap-2 mb-3">
           {role === "ADMIN" && (
-            <button onClick={increaseLimit} className="w-11 h-11 shrink-0 rounded-2xl bg-white text-black font-bold" title="Increase limit" type="button">+</button>
+            <button
+              onClick={increaseLimit}
+              className="w-11 h-11 shrink-0 rounded-2xl bg-white text-black font-bold"
+              title="Increase limit"
+              type="button"
+            >
+              +
+            </button>
           )}
 
-          <button type="button" onClick={openPrintAllForContainer} className="w-11 h-11 shrink-0 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10" title="Print all">🖨</button>
-          <button onClick={() => setShowList((v) => !v)} className="w-11 h-11 shrink-0 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10" title="Toggle list" type="button">☰</button>
-          <button onClick={openAddCustomerLayer} className="w-11 h-11 shrink-0 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10" title="Add customer" type="button">＋</button>
+          <button
+            type="button"
+            onClick={openPrintAllForContainer}
+            className="w-11 h-11 shrink-0 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10"
+            title="Print all"
+          >
+            🖨
+          </button>
+          <button
+            onClick={() => setShowList((v) => !v)}
+            className="w-11 h-11 shrink-0 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10"
+            title="Toggle list"
+            type="button"
+          >
+            ☰
+          </button>
+          <button
+            onClick={openAddCustomerLayer}
+            className="w-11 h-11 shrink-0 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10"
+            title="Add customer"
+            type="button"
+          >
+            ＋
+          </button>
         </div>
 
         {container?.mode === "DIKSHA" && reserved?.length > 0 ? (
           <div className="mb-3 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-3">
-            <div className="text-sm font-semibold text-emerald-100">Reserved / Occupied (Meeting holds)</div>
-            <div className="text-xs text-emerald-100/80 mt-1">Count: {reserved.length}</div>
+            <div className="text-sm font-semibold text-emerald-100">
+              Reserved / Occupied (Meeting holds)
+            </div>
+            <div className="text-xs text-emerald-100/80 mt-1">
+              Count: {reserved.length}
+            </div>
           </div>
         ) : null}
 
@@ -680,11 +1132,16 @@ export default function Calander({ role }) {
                 >
                   <div className="min-w-0">
                     <div className="text-xs text-white/60">
-                      #{seq} • {kind}{a.roleInPair ? ` (${a.roleInPair})` : ""}
+                      #{seq} • {kind}
+                      {a.roleInPair ? ` (${a.roleInPair})` : ""}
                     </div>
                     <div className="font-semibold truncate">{cust?.name}</div>
-                    <div className="text-xs text-white/60 truncate">{cust?.address || "-"}</div>
-                    <div className="text-[11px] text-white/50 mt-1">{cust?.gender}</div>
+                    <div className="text-xs text-white/60 truncate">
+                      {cust?.address || "-"}
+                    </div>
+                    <div className="text-[11px] text-white/50 mt-1">
+                      {cust?.gender}
+                    </div>
 
                     {isMeeting && a?.occupiedDate ? (
                       <div className="mt-2 inline-flex px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/15 border border-emerald-400/20 text-emerald-200">
@@ -697,7 +1154,10 @@ export default function Calander({ role }) {
                     <div className="flex flex-col gap-2 shrink-0">
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); confirmMeetingCard(a); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          confirmMeetingCard(a);
+                        }}
                         className="px-3 py-1 rounded-xl bg-white text-black text-xs font-semibold"
                       >
                         Confirm
@@ -718,7 +1178,10 @@ export default function Calander({ role }) {
                   ) : (
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); outAssignment(a._id); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        outAssignment(a._id);
+                      }}
                       className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15 text-xs shrink-0"
                     >
                       Out
@@ -737,7 +1200,10 @@ export default function Calander({ role }) {
         layerName="Reject"
         title="Reject Options"
         sub="Choose action"
-        onClose={() => { setRejectOpen(false); setRejectTarget(null); }}
+        onClose={() => {
+          setRejectOpen(false);
+          setRejectTarget(null);
+        }}
         maxWidth="max-w-md"
         disableBackdropClose
       >
@@ -780,7 +1246,10 @@ export default function Calander({ role }) {
 
             <button
               type="button"
-              onClick={() => { setRejectOpen(false); setRejectTarget(null); }}
+              onClick={() => {
+                setRejectOpen(false);
+                setRejectTarget(null);
+              }}
               className="px-4 py-3 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15"
             >
               Close
@@ -795,20 +1264,51 @@ export default function Calander({ role }) {
         layerName="Add Customer"
         title="Add Customer"
         sub="Sitting ACTIVE"
-        onClose={() => { setAddOpen(false); setConfirmSingleOpen(false); setConfirmFamilyOpen(false); }}
+        onClose={() => {
+          setAddOpen(false);
+          setConfirmSingleOpen(false);
+          setConfirmFamilyOpen(false);
+        }}
         maxWidth="max-w-4xl"
       >
         <div className="flex gap-2 mb-3 items-center flex-wrap">
-          <button onClick={() => { setPickMode("SINGLE"); setSelectedIds([]); }} className={`px-4 py-2 rounded-2xl text-sm ${pickMode==="SINGLE" ? "bg-white text-black font-semibold" : "bg-white/10 hover:bg-white/15"}`} type="button">
+          <button
+            onClick={() => {
+              setPickMode("SINGLE");
+              setSelectedIds([]);
+            }}
+            className={`px-4 py-2 rounded-2xl text-sm ${
+              pickMode === "SINGLE"
+                ? "bg-white text-black font-semibold"
+                : "bg-white/10 hover:bg-white/15"
+            }`}
+            type="button"
+          >
             Single
           </button>
 
-          <button onClick={() => { setPickMode("FAMILY"); setSelectedIds([]); }} className={`px-4 py-2 rounded-2xl text-sm ${pickMode==="FAMILY" ? "bg-white text-black font-semibold" : "bg-white/10 hover:bg-white/15"}`} type="button">
+          <button
+            onClick={() => {
+              setPickMode("FAMILY");
+              setSelectedIds([]);
+            }}
+            className={`px-4 py-2 rounded-2xl text-sm ${
+              pickMode === "FAMILY"
+                ? "bg-white text-black font-semibold"
+                : "bg-white/10 hover:bg-white/15"
+            }`}
+            type="button"
+          >
             Family (2+)
           </button>
 
           {pickMode === "FAMILY" && (
-            <button onClick={initiateFamilyAssign} disabled={selectedIds.length < 2} className="ml-auto px-4 py-2 rounded-2xl bg-white text-black font-semibold disabled:opacity-60" type="button">
+            <button
+              onClick={initiateFamilyAssign}
+              disabled={selectedIds.length < 2}
+              className="ml-auto px-4 py-2 rounded-2xl bg-white text-black font-semibold disabled:opacity-60"
+              type="button"
+            >
               Next
             </button>
           )}
@@ -821,7 +1321,9 @@ export default function Calander({ role }) {
 
             const familySelectedCls =
               pickMode === "FAMILY" && selected
-                ? (selectedIds.length === 2 ? "border-fuchsia-400/40 bg-fuchsia-500/10" : "border-blue-400/40 bg-blue-500/10")
+                ? selectedIds.length === 2
+                  ? "border-fuchsia-400/40 bg-fuchsia-500/10"
+                  : "border-blue-400/40 bg-blue-500/10"
                 : "";
 
             return (
@@ -829,23 +1331,38 @@ export default function Calander({ role }) {
                 key={id}
                 className={[
                   "rounded-2xl border p-3",
-                  pickMode === "FAMILY" ? `border-white/10 bg-black/30` : "border-white/10 bg-black/30",
+                  pickMode === "FAMILY"
+                    ? `border-white/10 bg-black/30`
+                    : "border-white/10 bg-black/30",
                   familySelectedCls,
                 ].join(" ")}
               >
                 <div className="font-semibold truncate">{c.name}</div>
-                <div className="text-xs text-white/60 truncate">{c.address || "-"}</div>
-                <div className="text-[11px] text-white/50 mt-1">Gender: {c.gender}</div>
+                <div className="text-xs text-white/60 truncate">
+                  {c.address || "-"}
+                </div>
+                <div className="text-[11px] text-white/50 mt-1">
+                  Gender: {c.gender}
+                </div>
 
                 <div className="mt-3 flex justify-end gap-2">
                   {pickMode === "SINGLE" ? (
-                    <button disabled={pushing} onClick={() => initiateSingleAssign(id)} className="px-3 py-2 rounded-xl bg-white text-black font-semibold text-xs disabled:opacity-60" type="button">
+                    <button
+                      disabled={pushing}
+                      onClick={() => initiateSingleAssign(id)}
+                      className="px-3 py-2 rounded-xl bg-white text-black font-semibold text-xs disabled:opacity-60"
+                      type="button"
+                    >
                       Next
                     </button>
                   ) : (
                     <button
                       onClick={() => {
-                        setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+                        setSelectedIds((prev) =>
+                          prev.includes(id)
+                            ? prev.filter((x) => x !== id)
+                            : [...prev, id]
+                        );
                       }}
                       className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-xs"
                       type="button"
@@ -861,24 +1378,44 @@ export default function Calander({ role }) {
       </LayerModal>
 
       {/* Confirm single */}
-      <LayerModal open={confirmSingleOpen} layerName="Confirm Single" title="Confirm Single" sub="Review details → Push" onClose={() => setConfirmSingleOpen(false)} maxWidth="max-w-2xl">
+      <LayerModal
+        open={confirmSingleOpen}
+        layerName="Confirm Single"
+        title="Confirm Single"
+        sub="Review details → Push"
+        onClose={() => setConfirmSingleOpen(false)}
+        maxWidth="max-w-2xl"
+      >
         <div className="rounded-3xl border border-white/10 bg-black/30 p-4">
           {targetSingle ? (
             <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
               <div className="text-xs text-white/60">CUSTOMER</div>
               <div className="font-semibold mt-1">{targetSingle.name}</div>
-              <div className="text-xs text-white/70 mt-1">{targetSingle.address || "-"}</div>
-              <div className="text-[11px] text-white/60 mt-1">Gender: {targetSingle.gender}</div>
+              <div className="text-xs text-white/70 mt-1">
+                {targetSingle.address || "-"}
+              </div>
+              <div className="text-[11px] text-white/60 mt-1">
+                Gender: {targetSingle.gender}
+              </div>
             </div>
           ) : (
             <div className="text-white/60">No customer selected.</div>
           )}
 
           <div className="mt-4 flex gap-2">
-            <button onClick={() => setConfirmSingleOpen(false)} className="flex-1 px-4 py-3 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15" type="button">
+            <button
+              onClick={() => setConfirmSingleOpen(false)}
+              className="flex-1 px-4 py-3 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15"
+              type="button"
+            >
               Back
             </button>
-            <button onClick={() => confirmSinglePush()} disabled={pushing || !targetSingle} className="flex-1 px-4 py-3 rounded-2xl bg-white text-black font-semibold disabled:opacity-60" type="button">
+            <button
+              onClick={() => confirmSinglePush()}
+              disabled={pushing || !targetSingle}
+              className="flex-1 px-4 py-3 rounded-2xl bg-white text-black font-semibold disabled:opacity-60"
+              type="button"
+            >
               {pushing ? "Pushing..." : "Push Single"}
             </button>
           </div>
@@ -895,11 +1432,24 @@ export default function Calander({ role }) {
         maxWidth="max-w-4xl"
       >
         <div className="mt-4 flex gap-2">
-          <button onClick={() => setConfirmFamilyOpen(false)} className="flex-1 px-4 py-3 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15" type="button">
+          <button
+            onClick={() => setConfirmFamilyOpen(false)}
+            className="flex-1 px-4 py-3 rounded-2xl bg-white/10 border border-white/10 hover:bg-white/15"
+            type="button"
+          >
             Back
           </button>
-          <button onClick={() => confirmFamilyPush()} disabled={pushing || selectedIds.length < 2} className="flex-1 px-4 py-3 rounded-2xl bg-white text-black font-semibold disabled:opacity-60" type="button">
-            {pushing ? "Pushing..." : (selectedIds.length === 2 ? "Push Couple" : "Push Family")}
+          <button
+            onClick={() => confirmFamilyPush()}
+            disabled={pushing || selectedIds.length < 2}
+            className="flex-1 px-4 py-3 rounded-2xl bg-white text-black font-semibold disabled:opacity-60"
+            type="button"
+          >
+            {pushing
+              ? "Pushing..."
+              : selectedIds.length === 2
+              ? "Push Couple"
+              : "Push Family"}
           </button>
         </div>
       </LayerModal>
@@ -908,7 +1458,10 @@ export default function Calander({ role }) {
       <DikshaOccupyPickerModal
         open={occupyOpen}
         groupSize={occupyCtx?.groupSize || 1}
-        onClose={() => { setOccupyOpen(false); setOccupyCtx(null); }}
+        onClose={() => {
+          setOccupyOpen(false);
+          setOccupyCtx(null);
+        }}
         onPick={async (dateKey) => {
           const ctx = occupyCtx;
           setOccupyOpen(false);

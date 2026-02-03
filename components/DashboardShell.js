@@ -13,41 +13,114 @@ import SittingData from "@/components/dashboard/SittingData";
 import UserCreate from "@/components/dashboard/UserCreate";
 import UserManage from "@/components/dashboard/UserManage";
 import CustomerLocationTracker from "@/components/dashboard/CustomerLocationTracker";
-import Screens from "@/components/dashboard/Screens";
 
-export default function DashboardShell({ session }) {
-  const themeApi = useTheme();
-  const isLight = themeApi?.theme === "light";
+// ✅ split screens into 2 dashboard components
+import ScreensCreate from "@/components/dashboard/ScreenCreate";
+import ScreensViewer from "@/components/dashboard/ScreenViewer";
 
-  const isAdmin = session.role === "ADMIN";
-  const perms = session.permissions || {
+function normalizePerms(input) {
+  const base = {
     recent: true,
     add: true,
     calander: true,
     pending: true,
     sitting: false,
     tracker: false,
-    screens: true, // ✅ default allow (you can control from permissions later)
+
+    // ✅ new split perms (default allow same as old behavior)
+    screensCreate: true,
+    screensView: true,
+
+    // legacy
+    screens: true,
+
+    ...(input || {}),
   };
 
-  const can = (key) => (isAdmin ? true : !!perms[key]);
+  // Backward compatibility:
+  // if old `screens` exists, map it to both (if new keys missing)
+  if (typeof base.screens === "boolean") {
+    if (typeof base.screensCreate !== "boolean") base.screensCreate = base.screens;
+    if (typeof base.screensView !== "boolean") base.screensView = base.screens;
+  }
+
+  // keep legacy in sync so older checks don't break anywhere else
+  base.screens = !!(base.screensCreate || base.screensView);
+
+  return base;
+}
+
+export default function DashboardShell({ session }) {
+  const themeApi = useTheme();
+  const isLight = themeApi?.theme === "light";
+
+  const isAdmin = session.role === "ADMIN";
+
+  const perms = useMemo(() => {
+    return normalizePerms(session.permissions);
+  }, [session.permissions]);
+
+  const can = (key) => {
+    if (isAdmin) return true;
+
+    // special handling for screens split (also supports legacy)
+    if (key === "screensCreate") return !!(perms.screensCreate || perms.screens);
+    if (key === "screensView") return !!(perms.screensView || perms.screens);
+
+    return !!perms[key];
+  };
 
   const tiles = useMemo(() => {
     const t = [];
-    if (can("recent")) t.push({ key: "recent", title: "Recent", sub: "Today DB", C: RecentCustomer });
-    if (can("add")) t.push({ key: "add", title: "Add Customer", sub: "Manual → Recent", C: AddCustomer });
-    if (can("calander")) t.push({ key: "calander", title: "Calander", sub: "Containers", C: Calander });
-    if (can("pending")) t.push({ key: "pending", title: "Pending", sub: "Paused", C: Pending });
-    if (can("sitting")) t.push({ key: "sitting", title: "Sitting", sub: "ACTIVE", C: SittingData });
 
-    if (isAdmin || can("tracker")) t.push({ key: "tracker", title: "Tracker", sub: "Where is customer now?", C: CustomerLocationTracker });
-    if (can("screens")) t.push({ key: "screens", title: "Screens", sub: "Presentation screens", C: Screens });
+    if (can("recent"))
+      t.push({ key: "recent", title: "Recent", sub: "Today DB", C: RecentCustomer });
 
-    if (isAdmin) t.push({ key: "usercreate", title: "User Create", sub: "Create employee", C: UserCreate });
-    if (isAdmin) t.push({ key: "usermanage", title: "User Manage", sub: "Permissions", C: UserManage });
+    if (can("add"))
+      t.push({ key: "add", title: "Add Customer", sub: "Manual → Recent", C: AddCustomer });
+
+    if (can("calander"))
+      t.push({ key: "calander", title: "Calander", sub: "Containers", C: Calander });
+
+    if (can("pending"))
+      t.push({ key: "pending", title: "Pending", sub: "Paused", C: Pending });
+
+    if (can("sitting"))
+      t.push({ key: "sitting", title: "Sitting", sub: "ACTIVE", C: SittingData });
+
+    if (can("tracker"))
+      t.push({
+        key: "tracker",
+        title: "Tracker",
+        sub: "Where is customer now?",
+        C: CustomerLocationTracker,
+      });
+
+    // ✅ Screens split in dashboard
+    if (can("screensCreate"))
+      t.push({
+        key: "screensCreate",
+        title: "Screens Create",
+        sub: "Create / Manage presentation screens",
+        C: ScreensCreate,
+      });
+
+    if (can("screensView"))
+      t.push({
+        key: "screensView",
+        title: "Screens View",
+        sub: "View by 5-char code (viewer tool)",
+        C: ScreensViewer,
+      });
+
+    if (isAdmin)
+      t.push({ key: "usercreate", title: "User Create", sub: "Create employee", C: UserCreate });
+
+    if (isAdmin)
+      t.push({ key: "usermanage", title: "User Manage", sub: "Permissions", C: UserManage });
 
     return t;
-  }, [isAdmin, perms]);
+  }, [isAdmin, perms]); // perms changes when session.permissions changes
 
   const [openKey, setOpenKey] = useState(null);
   const active = tiles.find((t) => t.key === openKey);
