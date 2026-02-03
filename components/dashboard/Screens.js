@@ -550,8 +550,7 @@ export default function Screens() {
               <div className="text-sm font-semibold mb-3">Screen Output (Preview)</div>
               {screen?.viewCode ? (
                 <ScreenViewClient
-                  key={String(screen?.updatedAt || screen?.viewCode)}
-                  viewCode={screen.viewCode}
+                 viewCode={screen.viewCode}
                   embedded
                 />
               ) : (

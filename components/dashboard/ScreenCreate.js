@@ -528,7 +528,7 @@ export default function ScreensCreate() {
             <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
               <div className="text-sm font-semibold mb-3">Screen Output (Preview)</div>
               {screen?.viewCode ? (
-                <ScreenViewClient viewCode={screen.viewCode} embedded />
+                <ScreenViewClient viewCode={screen.viewCode} embedded controlScreenId={openId} />
               ) : (
                 <div className="text-white/60">No viewCode</div>
               )}

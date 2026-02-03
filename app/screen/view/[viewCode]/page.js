@@ -6,6 +6,6 @@ export default async function ScreenViewPage({ params }) {
   const { viewCode } = await params;
   const code = String(viewCode || "").trim().toUpperCase();
 
-  // Full-screen viewer with LIVE polling
-  return <ScreenViewClient viewCode={code} embedded={false} pollMs={1000} />;
+  // SSE instant + poll fallback 1000ms
+  return <ScreenViewClient viewCode={code} embedded={false} liveMode="sse" pollMs={1000} />;
 }

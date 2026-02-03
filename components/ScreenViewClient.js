@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+const EMPTY_ARR = []; // ✅ stable fallback (no new [] each render)
+
 function themeBg(theme) {
   if (theme === "blue")
     return "bg-[radial-gradient(1200px_600px_at_15%_10%,rgba(59,130,246,0.25),transparent_55%),linear-gradient(to_bottom_right,#05070c,#070a12,#05070c)]";
@@ -32,6 +34,7 @@ function SlideMovie({ slide }) {
         <div className="text-[11px] text-white/60 tracking-widest">
           SYSBYTE • PRESENTATION
         </div>
+
         <div className="mt-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="text-3xl sm:text-4xl font-extrabold truncate">
@@ -43,6 +46,7 @@ function SlideMovie({ slide }) {
                 "—"}
             </div>
           </div>
+
           <div className="shrink-0 text-right">
             <div className="text-xs text-white/60">Roll No</div>
             <div className="mt-1 px-4 py-2 rounded-2xl bg-white text-black font-extrabold text-xl">
@@ -99,14 +103,19 @@ function SlideMovie({ slide }) {
 }
 
 /**
- * pollMs:
- * - default: embedded ? 0 : 2000
- * - pass pollMs={0} to fully disable auto refresh
+ * liveMode:
+ * - "sse" (default): instant updates using EventSource
+ * - "poll": polling only
+ * - "off": no auto update
  */
-export default function ScreenViewClient({ viewCode, embedded = false, pollMs }) {
-  const effectivePollMs =
-    typeof pollMs === "number" ? pollMs : embedded ? 0 : 2000;
-
+export default function ScreenViewClient({
+  viewCode,
+  embedded = false,
+  liveMode = "sse",
+  pollMs,
+  controlScreenId = null,
+}) {
+  const esRef = useRef(null);
   const aliveRef = useRef(true);
 
   const [screen, setScreen] = useState(null);
@@ -114,10 +123,28 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
   const [refreshing, setRefreshing] = useState(false);
   const [idx, setIdx] = useState(0);
 
+  const [liveStatus, setLiveStatus] = useState({ mode: "idle", connected: false });
+
+  const slides = screen?.slides ?? EMPTY_ARR; // ✅ stable fallback
+  const slidesRef = useRef(slides);
+
+  // keep latest slides in ref (for SSE control events)
+  useEffect(() => {
+    slidesRef.current = slides;
+  }, [slides]);
+
+  const theme = screen?.settings?.theme || "aurora";
+  const bg = useMemo(() => themeBg(theme), [theme]);
+
+  const effectivePollMs = typeof pollMs === "number" ? pollMs : embedded ? 0 : 1000;
+
   useEffect(() => {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
+      try {
+        esRef.current?.close?.();
+      } catch {}
     };
   }, []);
 
@@ -128,9 +155,10 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
     else setLoading(true);
 
     try {
-      const res = await fetch(`/api/screens/view/${encodeURIComponent(viewCode)}`);
+      const res = await fetch(`/api/screens/view/${encodeURIComponent(viewCode)}`, {
+        cache: "no-store",
+      });
       const data = await res.json().catch(() => ({}));
-
       if (!aliveRef.current) return;
 
       if (!res.ok) {
@@ -140,11 +168,9 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
 
       const next = data.screen;
 
-      // avoid re-render if nothing changed
       setScreen((prev) => {
         if (!prev || prev.error) return next;
-        if (prev?.updatedAt && next?.updatedAt && prev.updatedAt === next.updatedAt)
-          return prev;
+        if (prev?.updatedAt && next?.updatedAt && prev.updatedAt === next.updatedAt) return prev;
         return next;
       });
     } finally {
@@ -154,16 +180,133 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
     }
   }
 
-  // initial load (on code change)
+  // initial load on code change
   useEffect(() => {
     if (!viewCode) return;
     load({ soft: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewCode]);
 
-  // auto-poll (only if enabled)
+  // ✅ Sync idx using server activeSlideId (mirror)
+  useEffect(() => {
+    const activeId = screen?.activeSlideId;
+    if (!activeId) return;
+    const i = slides.findIndex((s) => s.slideId === activeId);
+    if (i >= 0) setIdx((prev) => (prev === i ? prev : i));
+  }, [screen?.activeSlideId, slides]);
+
+  // clamp idx
+  useEffect(() => {
+    if (!slides.length) {
+      setIdx(0);
+      return;
+    }
+    if (idx >= slides.length) setIdx(0);
+  }, [slides.length, idx]);
+
+  const current = slides[idx] || null;
+
+  async function remoteControl(cmd) {
+    if (!controlScreenId) return;
+    await fetch(`/api/screens/${encodeURIComponent(controlScreenId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "control", cmd }),
+    }).catch(() => {});
+  }
+
+  function localPrev() {
+    if (!slides.length) return;
+    setIdx((i) => (i - 1 + slides.length) % slides.length);
+  }
+  function localNext() {
+    if (!slides.length) return;
+    setIdx((i) => (i + 1) % slides.length);
+  }
+
+  // ✅ SSE effect (no slides dependency!)
   useEffect(() => {
     if (!viewCode) return;
+
+    // close old connection
+    try {
+      esRef.current?.close?.();
+    } catch {}
+    esRef.current = null;
+
+    if (liveMode !== "sse") return;
+
+    // set status once per connection init
+    setLiveStatus((s) => {
+      if (s.mode === "sse" && s.connected === false) return s;
+      return { mode: "sse", connected: false };
+    });
+
+    const url = `/api/screens/stream/${encodeURIComponent(viewCode)}`;
+    const es = new EventSource(url);
+    esRef.current = es;
+
+    es.addEventListener("hello", () => {
+      setLiveStatus({ mode: "sse", connected: true });
+    });
+
+    es.addEventListener("update", () => {
+      load({ soft: true });
+    });
+
+    // ✅ mirror slide change event
+    es.addEventListener("control", (e) => {
+      try {
+        const msg = JSON.parse(e?.data || "{}");
+        const activeId = msg?.activeSlideId;
+        if (!activeId) return;
+
+        const arr = slidesRef.current || EMPTY_ARR;
+        const i = arr.findIndex((s) => s.slideId === activeId);
+        if (i >= 0) setIdx((prev) => (prev === i ? prev : i));
+      } catch {}
+    });
+
+    es.addEventListener("delete", () => {
+      setScreen({ error: "Screen deleted" });
+    });
+
+    es.addEventListener("invalidate", (e) => {
+      try {
+        const msg = JSON.parse(e?.data || "{}");
+        setScreen({ error: `View code changed. New Code: ${msg?.newCode || "—"}` });
+      } catch {
+        setScreen({ error: "View code changed" });
+      }
+    });
+
+    es.onerror = () => {
+      try {
+        es.close();
+      } catch {}
+      esRef.current = null;
+
+      if (effectivePollMs > 0) setLiveStatus({ mode: "poll", connected: true });
+      else setLiveStatus({ mode: "off", connected: false });
+    };
+
+    return () => {
+      try {
+        es.close();
+      } catch {}
+    };
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewCode, liveMode, effectivePollMs]);
+
+  // Poll fallback
+  useEffect(() => {
+    if (!viewCode) return;
+
+    const shouldPoll =
+      liveMode === "poll" || (liveMode === "sse" && liveStatus.mode === "poll");
+
+    if (!shouldPoll) return;
     if (!effectivePollMs || effectivePollMs <= 0) return;
 
     let stop = false;
@@ -171,13 +314,6 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
 
     const tick = async () => {
       if (stop) return;
-
-      // pause polling if tab hidden
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        t = setTimeout(tick, effectivePollMs);
-        return;
-      }
-
       await load({ soft: true });
       t = setTimeout(tick, effectivePollMs);
     };
@@ -189,42 +325,30 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
       if (t) clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewCode, effectivePollMs]);
+  }, [viewCode, liveMode, liveStatus.mode, effectivePollMs]);
 
-  const slides = screen?.slides || [];
-  const theme = screen?.settings?.theme || "aurora";
-
-  useEffect(() => {
-    if (!slides.length) {
-      setIdx(0);
-      return;
-    }
-    if (idx >= slides.length) setIdx(0);
-  }, [slides.length, idx]);
-
-  const current = slides[idx] || null;
-  const bg = useMemo(() => themeBg(theme), [theme]);
-
-  // Keyboard support: ArrowLeft/ArrowRight
+  // Keyboard navigation
   useEffect(() => {
     function onKeyDown(e) {
       const tag = e?.target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
-      if (!slides.length) return;
+      if (!slidesRef.current?.length) return;
 
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        setIdx((i) => Math.max(0, i - 1));
+        if (controlScreenId) remoteControl("prev");
+        else localPrev();
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        setIdx((i) => (slides.length ? (i + 1) % slides.length : 0));
+        if (controlScreenId) remoteControl("next");
+        else localNext();
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [slides.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controlScreenId]);
 
   const Wrapper = ({ children }) =>
     embedded ? (
@@ -234,6 +358,17 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
         <div className="max-w-6xl mx-auto p-4 sm:p-6">{children}</div>
       </div>
     );
+
+  const liveLabel =
+    liveMode === "off"
+      ? "LIVE: OFF"
+      : liveMode === "poll"
+      ? `LIVE: POLL (${effectivePollMs}ms)`
+      : liveStatus.mode === "sse" && liveStatus.connected
+      ? "LIVE: SSE (Instant)"
+      : liveStatus.mode === "poll"
+      ? `LIVE: POLL (${effectivePollMs}ms)`
+      : "LIVE: SSE (connecting...)";
 
   return (
     <Wrapper>
@@ -245,8 +380,8 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
             {screen?.title ? `${screen.title} • By ${screen.createdByUsername || "—"}` : ""}
           </div>
           <div className="text-[11px] text-white/50 mt-1">
-            Keyboard: ← Prev • → Next
-            {effectivePollMs > 0 ? ` • Live: ON (${effectivePollMs}ms)` : " • Live: OFF"}
+            {controlScreenId ? "MODE: REMOTE CONTROL • " : "MODE: LOCAL • "}
+            {liveLabel}
           </div>
         </div>
 
@@ -262,7 +397,7 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
           <button
             type="button"
             disabled={!slides.length}
-            onClick={() => setIdx((i) => Math.max(0, i - 1))}
+            onClick={() => (controlScreenId ? remoteControl("prev") : localPrev())}
             className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs disabled:opacity-60"
           >
             Prev
@@ -271,7 +406,7 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
           <button
             type="button"
             disabled={!slides.length}
-            onClick={() => setIdx((i) => (slides.length ? (i + 1) % slides.length : 0))}
+            onClick={() => (controlScreenId ? remoteControl("next") : localNext())}
             className="px-3 py-2 rounded-xl bg-white/10 border border-white/10 hover:bg-white/15 text-xs disabled:opacity-60"
           >
             Next
@@ -296,7 +431,7 @@ export default function ScreenViewClient({ viewCode, embedded = false, pollMs })
         <>
           <SlideMovie slide={current} />
           <div className="mt-2 text-xs text-white/60">
-            Slide {idx + 1}/{slides.length}
+            Slide {slides.length ? idx + 1 : 0}/{slides.length}
           </div>
         </>
       )}

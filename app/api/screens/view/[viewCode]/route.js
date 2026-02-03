@@ -16,7 +16,16 @@ export async function GET(req, { params }) {
   const db = await getDb();
   const s = await db.collection("presentationScreens").findOne(
     { viewCodeLower: code.toLowerCase() },
-    { projection: { title: 1, createdByUsername: 1, settings: 1, slides: 1, updatedAt: 1 } }
+    {
+      projection: {
+        title: 1,
+        createdByUsername: 1,
+        settings: 1,
+        slides: 1,
+        updatedAt: 1,
+        activeSlideId: 1, // ✅ added
+      },
+    }
   );
 
   if (!s) return NextResponse.json({ error: "Invalid viewCode" }, { status: 404 });
@@ -35,6 +44,7 @@ export async function GET(req, { params }) {
       title: s.title || "Untitled",
       createdByUsername: s.createdByUsername || "—",
       updatedAt: s.updatedAt || null,
+      activeSlideId: s.activeSlideId || null, // ✅ added
       settings,
       slides: (s.slides || []).map((sl) => ({
         slideId: sl.slideId,
@@ -48,7 +58,6 @@ export async function GET(req, { params }) {
     viewer: { canEdit: false },
   });
 
-  // ✅ prevent caching so viewer gets latest quickly
   res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.headers.set("Pragma", "no-cache");
   res.headers.set("Expires", "0");

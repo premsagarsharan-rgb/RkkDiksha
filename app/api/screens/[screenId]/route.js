@@ -3,6 +3,7 @@ import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { getSession } from "@/lib/session";
 import crypto from "crypto";
+import { publishScreen } from "@/lib/screenBus";
 
 export const runtime = "nodejs";
 
@@ -37,8 +38,14 @@ async function findCustomerSnapshot(db, customerId) {
   let c = await db.collection("sittingCustomers").findOne({ _id });
   let sourceDb = "sittingCustomers";
 
-  if (!c) { c = await db.collection("pendingCustomers").findOne({ _id }); sourceDb = "pendingCustomers"; }
-  if (!c) { c = await db.collection("todayCustomers").findOne({ _id }); sourceDb = "todayCustomers"; }
+  if (!c) {
+    c = await db.collection("pendingCustomers").findOne({ _id });
+    sourceDb = "pendingCustomers";
+  }
+  if (!c) {
+    c = await db.collection("todayCustomers").findOne({ _id });
+    sourceDb = "todayCustomers";
+  }
   if (!c) return null;
 
   return {
@@ -56,6 +63,26 @@ async function findCustomerSnapshot(db, customerId) {
   };
 }
 
+function notifyUpdate(codeLower, payload) {
+  if (!codeLower) return;
+  publishScreen(String(codeLower).toLowerCase(), {
+    event: "update",
+    type: "updated",
+    ts: Date.now(),
+    ...payload,
+  });
+}
+
+function notifyControl(codeLower, payload) {
+  if (!codeLower) return;
+  publishScreen(String(codeLower).toLowerCase(), {
+    event: "control",
+    type: "control",
+    ts: Date.now(),
+    ...payload,
+  });
+}
+
 export async function GET(req, { params }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -68,7 +95,6 @@ export async function GET(req, { params }) {
   const isOwner = String(s.createdByUserId || "") === String(session.userId || "");
   if (!isOwner) return NextResponse.json({ error: "Locked (creator only). Use viewCode to view." }, { status: 403 });
 
-  // manual-only enforced
   const settings = {
     cardStyle: s?.settings?.cardStyle || "movie",
     autoplay: false,
@@ -88,6 +114,8 @@ export async function GET(req, { params }) {
 
       viewCode: s.viewCode || null,
       viewCodeUpdatedAt: s.viewCodeUpdatedAt || null,
+
+      activeSlideId: s.activeSlideId || null, // ✅ added
 
       settings,
 
@@ -122,11 +150,15 @@ export async function PATCH(req, { params }) {
   if (!isOwner) return NextResponse.json({ error: "Only screen creator can edit" }, { status: 403 });
 
   const now = new Date();
+  const codeLower = String(screen.viewCodeLower || screen.viewCode || "").toLowerCase();
+  const slidesArr = Array.isArray(screen.slides) ? screen.slides : [];
 
   if (action === "rename") {
     const title = safeStr(body?.title);
     if (!title) return NextResponse.json({ error: "Title required" }, { status: 400 });
     await db.collection("presentationScreens").updateOne({ _id }, { $set: { title, updatedAt: now } });
+
+    notifyUpdate(codeLower, { action: "rename" });
     return NextResponse.json({ ok: true });
   }
 
@@ -152,7 +184,58 @@ export async function PATCH(req, { params }) {
       { _id },
       { $set: { settings: nextSettings, updatedAt: now } }
     );
+
+    notifyUpdate(codeLower, { action: "settings" });
     return NextResponse.json({ ok: true });
+  }
+
+  // ✅ NEW: remote control (mirror prev/next)
+  if (action === "control") {
+    const cmd = safeStr(body?.cmd).toLowerCase(); // next | prev | set
+    if (!["next", "prev", "set"].includes(cmd)) {
+      return NextResponse.json({ error: "cmd invalid" }, { status: 400 });
+    }
+
+    if (slidesArr.length === 0) {
+      await db.collection("presentationScreens").updateOne(
+        { _id },
+        { $set: { activeSlideId: null, updatedAt: now } }
+      );
+      notifyControl(codeLower, { cmd, activeSlideId: null });
+      notifyUpdate(codeLower, { action: "control" });
+      return NextResponse.json({ ok: true, activeSlideId: null });
+    }
+
+    let curIdx = -1;
+    if (screen.activeSlideId) {
+      curIdx = slidesArr.findIndex((s) => s.slideId === screen.activeSlideId);
+    }
+    if (curIdx < 0) curIdx = 0;
+
+    let nextIdx = curIdx;
+
+    if (cmd === "next") nextIdx = (curIdx + 1) % slidesArr.length;
+    if (cmd === "prev") nextIdx = (curIdx - 1 + slidesArr.length) % slidesArr.length;
+
+    if (cmd === "set") {
+      const slideId = safeStr(body?.slideId);
+      const found = slidesArr.findIndex((s) => s.slideId === slideId);
+      if (found >= 0) nextIdx = found;
+    }
+
+    const activeSlideId = slidesArr[nextIdx]?.slideId || slidesArr[0]?.slideId || null;
+
+    await db.collection("presentationScreens").updateOne(
+      { _id },
+      { $set: { activeSlideId, updatedAt: now } }
+    );
+
+    // instant mirror
+    notifyControl(codeLower, { cmd, activeSlideId });
+    // also publish update so non-SSE clients/pollers stay consistent
+    notifyUpdate(codeLower, { action: "control" });
+
+    return NextResponse.json({ ok: true, activeSlideId });
   }
 
   if (action === "setViewCode") {
@@ -170,10 +253,16 @@ export async function PATCH(req, { params }) {
     );
     if (exists) return NextResponse.json({ error: "viewCode already used" }, { status: 409 });
 
+    const oldLower = String(screen.viewCodeLower || screen.viewCode || "").toLowerCase();
+
     await db.collection("presentationScreens").updateOne(
       { _id },
       { $set: { viewCode: v, viewCodeLower: lower, viewCodeUpdatedAt: now, updatedAt: now } }
     );
+
+    if (oldLower) publishScreen(oldLower, { event: "invalidate", type: "codeChanged", newCode: v, ts: Date.now() });
+    publishScreen(lower, { event: "update", type: "updated", ts: Date.now(), action: "setViewCode" });
+
     return NextResponse.json({ ok: true, viewCode: v });
   }
 
@@ -193,10 +282,17 @@ export async function PATCH(req, { params }) {
     }
     if (!viewCode) return NextResponse.json({ error: "VIEWCODE_ALLOCATE_FAILED" }, { status: 500 });
 
+    const oldLower = String(screen.viewCodeLower || screen.viewCode || "").toLowerCase();
+    const newLower = viewCode.toLowerCase();
+
     await db.collection("presentationScreens").updateOne(
       { _id },
-      { $set: { viewCode, viewCodeLower: viewCode.toLowerCase(), viewCodeUpdatedAt: now, updatedAt: now } }
+      { $set: { viewCode, viewCodeLower: newLower, viewCodeUpdatedAt: now, updatedAt: now } }
     );
+
+    if (oldLower) publishScreen(oldLower, { event: "invalidate", type: "codeChanged", newCode: viewCode, ts: Date.now() });
+    publishScreen(newLower, { event: "update", type: "updated", ts: Date.now(), action: "regenViewCode" });
+
     return NextResponse.json({ ok: true, viewCode });
   }
 
@@ -234,25 +330,54 @@ export async function PATCH(req, { params }) {
       createdByUserId: session.userId,
     };
 
+    const setObj = { updatedAt: now };
+    // if first slide and no activeSlideId, set it
+    if (!screen.activeSlideId && slidesArr.length === 0) {
+      setObj.activeSlideId = slide.slideId;
+    }
+
     await db.collection("presentationScreens").updateOne(
       { _id },
-      { $push: { slides: slide }, $set: { updatedAt: now } }
+      { $push: { slides: slide }, $set: setObj }
     );
+
+    notifyUpdate(codeLower, { action: "addSlide", slideId: slide.slideId });
+
+    // if activeSlideId was set, also broadcast control so everyone jumps to it
+    if (setObj.activeSlideId) {
+      notifyControl(codeLower, { cmd: "set", activeSlideId: setObj.activeSlideId });
+    }
+
     return NextResponse.json({ ok: true, slideId: slide.slideId });
   }
 
   if (action === "removeSlide") {
     const slideId = safeStr(body?.slideId);
     if (!slideId) return NextResponse.json({ error: "slideId required" }, { status: 400 });
+
+    const remaining = slidesArr.filter((s) => s.slideId !== slideId);
+    const nextActive = screen.activeSlideId === slideId ? (remaining[0]?.slideId || null) : (screen.activeSlideId || null);
+
     await db.collection("presentationScreens").updateOne(
       { _id },
-      { $pull: { slides: { slideId } }, $set: { updatedAt: now } }
+      { $pull: { slides: { slideId } }, $set: { updatedAt: now, activeSlideId: nextActive } }
     );
+
+    notifyUpdate(codeLower, { action: "removeSlide", slideId });
+    notifyControl(codeLower, { cmd: "set", activeSlideId: nextActive });
+
     return NextResponse.json({ ok: true });
   }
 
   if (action === "clearSlides") {
-    await db.collection("presentationScreens").updateOne({ _id }, { $set: { slides: [], updatedAt: now } });
+    await db.collection("presentationScreens").updateOne(
+      { _id },
+      { $set: { slides: [], activeSlideId: null, updatedAt: now } }
+    );
+
+    notifyUpdate(codeLower, { action: "clearSlides" });
+    notifyControl(codeLower, { cmd: "set", activeSlideId: null });
+
     return NextResponse.json({ ok: true });
   }
 
@@ -262,7 +387,7 @@ export async function PATCH(req, { params }) {
     if (!slideId) return NextResponse.json({ error: "slideId required" }, { status: 400 });
     if (!["up", "down"].includes(dir)) return NextResponse.json({ error: "dir invalid" }, { status: 400 });
 
-    const slides = Array.isArray(screen.slides) ? [...screen.slides] : [];
+    const slides = [...slidesArr];
     const idx = slides.findIndex((x) => x.slideId === slideId);
     if (idx < 0) return NextResponse.json({ error: "Slide not found" }, { status: 404 });
 
@@ -277,6 +402,8 @@ export async function PATCH(req, { params }) {
       { _id },
       { $set: { slides, updatedAt: now } }
     );
+
+    notifyUpdate(codeLower, { action: "moveSlide", slideId, dir });
     return NextResponse.json({ ok: true });
   }
 
@@ -302,20 +429,13 @@ export async function DELETE(req, { params }) {
   const isOwner = String(screen.createdByUserId || "") === String(session.userId || "");
   if (!isOwner) return NextResponse.json({ error: "Only screen creator can delete" }, { status: 403 });
 
-  const now = new Date();
-
-  // audit log (optional)
-  try {
-    await db.collection("screenAuditLogs").insertOne({
-      screenId: String(_id),
-      action: "DELETE_SCREEN",
-      title: screen.title || "",
-      viewCode: screen.viewCode || null,
-      commitMessage,
-      actor: { userId: session.userId, username: session.username, role: session.role },
-      createdAt: now,
+  if (screen.viewCodeLower) {
+    publishScreen(String(screen.viewCodeLower).toLowerCase(), {
+      event: "delete",
+      type: "deleted",
+      ts: Date.now(),
     });
-  } catch {}
+  }
 
   await db.collection("presentationScreens").deleteOne({ _id });
 
