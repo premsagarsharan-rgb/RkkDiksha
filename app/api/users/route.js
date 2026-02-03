@@ -6,7 +6,18 @@ import { getSession } from "@/lib/session";
 
 export const runtime = "nodejs";
 
-const PERM_KEYS = ["recent", "add", "calander", "pending", "sitting"];
+// ✅ updated permission keys (new + legacy)
+const PERM_KEYS = [
+  "recent",
+  "add",
+  "calander",
+  "pending",
+  "sitting",
+  "tracker",
+  "screensCreate",
+  "screensView",
+  "screens", // legacy
+];
 
 async function ensureUserIndexes(db) {
   try {
@@ -14,10 +25,23 @@ async function ensureUserIndexes(db) {
   } catch {}
 }
 
-function sanitizePermissions(input) {
+function normalizePermissionsForSave(input) {
+  const raw = { ...(input || {}) };
+
+  // legacy mapping: screens -> both
+  if (typeof raw.screens === "boolean") {
+    if (typeof raw.screensCreate !== "boolean") raw.screensCreate = raw.screens;
+    if (typeof raw.screensView !== "boolean") raw.screensView = raw.screens;
+  }
+
+  // keep legacy in sync
+  if (typeof raw.screensCreate === "boolean" || typeof raw.screensView === "boolean") {
+    raw.screens = !!(raw.screensCreate || raw.screensView);
+  }
+
   const clean = {};
   for (const k of PERM_KEYS) {
-    if (typeof input?.[k] === "boolean") clean[k] = input[k];
+    if (typeof raw?.[k] === "boolean") clean[k] = raw[k];
   }
   return clean;
 }
@@ -34,17 +58,10 @@ export async function GET() {
     .collection("users")
     .find({})
     .sort({ createdAt: -1 })
-    .project({
-      passwordHash: 0, // never expose
-    })
+    .project({ passwordHash: 0 })
     .toArray();
 
-  // stringify _id for client
-  const out = items.map((u) => ({
-    ...u,
-    _id: String(u._id),
-  }));
-
+  const out = items.map((u) => ({ ...u, _id: String(u._id) }));
   return NextResponse.json({ items: out });
 }
 
@@ -60,8 +77,12 @@ export async function POST(req) {
   const pass = String(password || "");
 
   if (!uname) return NextResponse.json({ error: "Username required" }, { status: 400 });
-  if (!pass || pass.length < 4) return NextResponse.json({ error: "Password required (min 4)" }, { status: 400 });
-  if (!["ADMIN", "USER"].includes(role)) return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+  if (!pass || pass.length < 4) {
+    return NextResponse.json({ error: "Password required (min 4)" }, { status: 400 });
+  }
+  if (!["ADMIN", "USER"].includes(role)) {
+    return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+  }
 
   const db = await getDb();
   await ensureUserIndexes(db);
@@ -75,19 +96,21 @@ export async function POST(req) {
     updatedAt: new Date(),
   };
 
-  // USER role => store permissions (whitelist)
   if (role === "USER") {
-    doc.permissions = sanitizePermissions(
-      permissions || {
-        recent: true,
-        add: true,
-        calander: true,
-        pending: true,
-        sitting: false,
-      }
-    );
+    // ✅ default perms + sanitize
+    const defaults = {
+      recent: true,
+      add: true,
+      calander: true,
+      pending: true,
+      sitting: false,
+      tracker: false,
+      screensCreate: false,
+      screensView: false,
+    };
+
+    doc.permissions = normalizePermissionsForSave({ ...defaults, ...(permissions || {}) });
   } else {
-    // ADMIN role => permissions optional (admin has all anyway)
     doc.permissions = null;
   }
 

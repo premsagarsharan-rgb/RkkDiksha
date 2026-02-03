@@ -9,7 +9,6 @@ export async function GET(req, { params }) {
   const code = String(viewCode || "").trim();
   if (!code) return NextResponse.json({ error: "Missing viewCode" }, { status: 400 });
 
-  // ✅ strict: max 5 (actually exactly 5)
   if (code.length !== 5) {
     return NextResponse.json({ error: "Invalid viewCode length" }, { status: 400 });
   }
@@ -22,7 +21,6 @@ export async function GET(req, { params }) {
 
   if (!s) return NextResponse.json({ error: "Invalid viewCode" }, { status: 404 });
 
-  // manual-only enforced
   const settings = {
     cardStyle: s?.settings?.cardStyle || "movie",
     autoplay: false,
@@ -31,7 +29,7 @@ export async function GET(req, { params }) {
     theme: s?.settings?.theme || "aurora",
   };
 
-  return NextResponse.json({
+  const res = NextResponse.json({
     screen: {
       _id: String(s._id),
       title: s.title || "Untitled",
@@ -49,4 +47,10 @@ export async function GET(req, { params }) {
     },
     viewer: { canEdit: false },
   });
+
+  // ✅ prevent caching so viewer gets latest quickly
+  res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.headers.set("Pragma", "no-cache");
+  res.headers.set("Expires", "0");
+  return res;
 }
